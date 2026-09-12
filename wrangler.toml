@@ -1,0 +1,8 @@
+﻿name = "telegram-bot"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "telegram-bot-db"
+database_id = "03bbe163-9c8b-4c51-8e8f-f9666a7c7725"
