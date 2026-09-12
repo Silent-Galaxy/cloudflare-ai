@@ -1,0 +1,21 @@
+{
+  "name": "cf-safe-bot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Silent-Galaxy/cloudflare-ai.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Silent-Galaxy/cloudflare-ai/issues"
+  },
+  "homepage": "https://github.com/Silent-Galaxy/cloudflare-ai#readme"
+}
