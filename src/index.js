@@ -1,18 +1,8 @@
-﻿# 1. ذخیره کد کپی‌شده در فایل src/index.js
-Get-Clipboard | Out-File -FilePath "src\index.js" -Encoding utf8
-
-# 2. اضافه کردن و ثبت در گیت
-git add src/index.js
-git commit -m "feat: add main telegram bot source code (v5.12)"
-
-# 3. ارسال به گیت‌هاب
-git push
-/**
+﻿/**
  * Telegram Bot — Cloudflare Worker (v5.12 — Admin Salary + Tax Share + Live Stats)
  * ربات تبلیغات و کسب درآمد تلگرام
  * Pagination استاندارد در همه لیست‌ها + بهینه‌سازی کوئری‌ها
  */
-
 const API = "https://api.telegram.org/bot";
 const SUPER_ADMIN = "90267861";
 const BOT_FALLBACK = "SilentGalaxy_bot";
@@ -54,7 +44,6 @@ function getPerms(u, uid) {
   if (u?.admin_role && u.admin_role !== "null") return u.admin_role.split(",").filter(Boolean);
   return [];
 }
-
 const isAdmin = (u, uid) => getPerms(u, uid).length > 0;
 const canAccess = (u, uid, p) => getPerms(u, uid).includes(p);
 
@@ -78,7 +67,7 @@ async function tg(token, method, params = {}) {
 const kb = (btns) => ({ inline_keyboard: btns.filter(r => r.length > 0) });
 const edit = (env, cid, mid, text, btns) => tg(env.TELEGRAM_TOKEN, "editMessageText", { chat_id: cid, message_id: mid, text, reply_markup: kb(btns) });
 const send = (env, cid, text, btns) => tg(env.TELEGRAM_TOKEN, "sendMessage", { chat_id: cid, text, reply_markup: btns ? kb(btns) : undefined });
-const alert = (env, cbId, text, alert = true) => tg(env.TELEGRAM_TOKEN, "answerCallbackQuery", { callback_query_id: cbId, text, show_alert: alert });
+const alert = (env, cbId, text, show_alert = true) => tg(env.TELEGRAM_TOKEN, "answerCallbackQuery", { callback_query_id: cbId, text, show_alert });
 
 // ==================== DB Helpers ====================
 async function getSetting(env, key, def) {
@@ -102,6 +91,7 @@ async function registerUser(env, from) {
   await DB(env).prepare(
     "INSERT OR IGNORE INTO users (telegram_id, first_name, username, referral_code, privacy_leaderboard, privacy_show_name) VALUES (?, ?, ?, ?, 1, 1)"
   ).bind(uid, from?.first_name || "", from?.username || "", code).run();
+  
   const u = await getUser(env, uid);
   if (u && !u.referral_code) {
     await DB(env).prepare("UPDATE users SET referral_code = ? WHERE telegram_id = ? AND referral_code IS NULL").bind(code, uid).run();
@@ -179,13 +169,13 @@ function fmtTx(t, withDate = true) {
   const icon = t.amount > 0 ? "🟢" : "🔴";
   const label = TX_LABELS[t.type] || t.type;
   let line = `${icon} ${t.amount > 0 ? "+" : ""}${t.amount} — ${label}`;
-  if (t.description && t.description !== label) line += `\n   💬 ${t.description}`;
-  if (withDate && t.created_at) line += `\n   🕐 ${fmtDate(t.created_at)}`;
-  if (t.reference_id) line += `\n   🔖 ${t.reference_id}`;
+  if (t.description && t.description !== label) line += `\n💬 ${t.description}`;
+  if (withDate && t.created_at) line += `\n🕐 ${fmtDate(t.created_at)}`;
+  if (t.reference_id) line += `\n🔖 ${t.reference_id}`;
   return line;
 }
 
-// ==================== Pagination (Standardized) ====================
+// ==================== Pagination ====================
 function pageNav(prefix, offset, limit, hasMore) {
   const nav = [];
   if (offset > 0) nav.push({ text: "⬅️ قبلی", callback_data: `${prefix}_${Math.max(0, offset - limit)}` });
@@ -207,12 +197,12 @@ async function paginatedList(opts) {
     DB(env).prepare(countQuery).bind(...bindParams).first(),
   ]);
   const total = count?.c || 0;
-  let text = `${title}\n━━━━━━━━━━━━━━━━\n\n`;
+  let text = `${title}\n━━━━━━━━━━━━━━━━\n`;
   const btns = [];
   if (rows.results.length === 0) { text += "موردی وجود ندارد."; }
   else {
-    text += pageIndicator(offset, limit, total) + "\n\n";
-    text += rows.results.map((r, i) => formatter(r, offset + i)).join("\n\n");
+    text += pageIndicator(offset, limit, total) + "\n";
+    text += rows.results.map((r, i) => formatter(r, offset + i)).join("\n");
   }
   const navPrefix = prefix.replace(/_\d+$/, "");
   const nav = pageNav(navPrefix, offset, limit, rows.results.length === limit);
@@ -252,7 +242,7 @@ function budgetText(title, channel, budget, cost, taxP, balance) {
   const tax = Math.ceil(budget * (taxP / 100));
   const total = budget + tax;
   const ok = balance >= total;
-  let text = `📊 بودجه\n\n📌 ${title}\n🔗 ${channel}\n\n💵 بودجه: ${budget}\n👥 ~${Math.floor(budget / cost)} عضو\n\n`;
+  let text = `📊 بودجه\n📌 ${title}\n🔗 ${channel}\n💵 بودجه: ${budget}\n👥 ~${Math.floor(budget / cost)} عضو\n`;
   text += `• پایه: ${budget}\n• مالیات (${taxP}%): ${tax}\n`;
   text += ok || budget === 0 ? `• کل: ${total} ✅` : `• کل: ${total} ❌ (کمبود: ${total - balance})`;
   return { text, ok, total, tax };
@@ -265,6 +255,7 @@ async function checkLeftMembers(env) {
   const now = Date.now();
   const campaigns = await DB(env).prepare("SELECT id, channel_username, title, reward_per_join, owner_id, total_budget, spent, tax_percent, hourly_cost, hourly_paid, last_hour_check FROM campaigns WHERE status = 'active'").all();
   let checked = 0, left = 0, stopped = 0, hourlyCharged = 0;
+  
   for (const ad of campaigns.results) {
     let botAdmin = false;
     if (botId) {
@@ -274,6 +265,7 @@ async function checkLeftMembers(env) {
         botAdmin = st === "administrator" || st === "creator";
       } catch { botAdmin = false; }
     }
+    
     if (!botAdmin) {
       stopped++;
       const sp = ad.spent || 0;
@@ -292,11 +284,12 @@ async function checkLeftMembers(env) {
         }
         await tg(env.TELEGRAM_TOKEN, "sendMessage", {
           chat_id: parseInt(ownerId),
-          text: "🛑 تبلیغ شما متوقف شد!\n\n📌 " + (ad.title || ad.channel_username) + "\n🔗 " + ad.channel_username + "\n\n❌ دلیل: ربات ادمین کانال نیست (حذف/بن/کیک شده یا کانال در دسترس نیست)\n\n💸 خرج: " + sp + " | 💵 باقی: " + remaining + " | 💰 بازگشت: " + totalRefund + "\n\n💡 ربات را دوباره ادمین کنید و تبلیغ را تمدید کنید."
+          text: `🛑 تبلیغ شما متوقف شد!\n📌 ${ad.title || ad.channel_username}\n🔗 ${ad.channel_username}\n❌ دلیل: ربات ادمین کانال نیست\n💸 خرج: ${sp} | 💵 باقی: ${remaining} | 💰 بازگشت: ${totalRefund}\n💡 ربات را دوباره ادمین کنید و تبلیغ را تمدید کنید.`
         });
       }
       continue;
     }
+    
     const hourlyCost = ad.hourly_cost || 0;
     if (hourlyCost > 0) {
       const lastCheck = ad.last_hour_check ? new Date(ad.last_hour_check.replace(" ", "T") + "Z").getTime() : 0;
@@ -311,7 +304,7 @@ async function checkLeftMembers(env) {
           if (ownerId) {
             await tg(env.TELEGRAM_TOKEN, "sendMessage", {
               chat_id: parseInt(ownerId),
-              text: "⏰ بودجه ساعتی تمام شد!\n\n📌 " + (ad.title || ad.channel_username) + "\n💰 هزینه ساعتی: " + hourlyCost + "/ساعت\n💸 کل کسر ساعتی: " + ((ad.hourly_paid || 0) + finalCharge) + "\n\n💡 برای ادامه، تبلیغ را تمدید کنید."
+              text: `⏰ بودجه ساعتی تمام شد!\n📌 ${ad.title || ad.channel_username}\n💰 هزینه ساعتی: ${hourlyCost}/ساعت\n💸 کل کسر ساعتی: ${((ad.hourly_paid || 0) + finalCharge)}\n💡 برای ادامه، تبلیغ را تمدید کنید.`
             });
           }
           hourlyCharged++;
@@ -323,12 +316,13 @@ async function checkLeftMembers(env) {
           if (ownerId) {
             await tg(env.TELEGRAM_TOKEN, "sendMessage", {
               chat_id: parseInt(ownerId),
-              text: "⏰ کسر ساعتی\n\n📌 " + (ad.title || ad.channel_username) + "\n💰 " + hoursElapsed + " ساعت × " + hourlyCost + " = " + charge + " امتیاز\n💵 باقی‌مانده: " + (currentRemaining - charge)
+              text: `⏰ کسر ساعتی\n📌 ${ad.title || ad.channel_username}\n💰 ${hoursElapsed} ساعت × ${hourlyCost} = ${charge} امتیاز\n💵 باقی‌مانده: ${currentRemaining - charge}`
             });
           }
         }
       }
     }
+    
     const participants = await DB(env).prepare("SELECT user_id FROM campaign_participants WHERE campaign_id = ? AND status = 'rewarded'").bind(ad.id).all();
     for (const p of participants.results) {
       checked++;
@@ -339,21 +333,23 @@ async function checkLeftMembers(env) {
         await DB(env).prepare("UPDATE users SET balance = MAX(0, balance - ?), total_earnings = MAX(0, total_earnings - ?) WHERE telegram_id = ?").bind(reward, reward, p.user_id).run();
         await addTx(env, p.user_id, "ad_penalty", -reward, "جریمه لفت (خودکار): " + (ad.title || ad.channel_username), "cron_left_" + ad.id + "_" + p.user_id + "_" + Date.now());
         await DB(env).prepare("UPDATE campaigns SET spent = MAX(0, spent - ?) WHERE id = ?").bind(reward, ad.id).run();
-        await tg(env.TELEGRAM_TOKEN, "sendMessage", { chat_id: parseInt(p.user_id), text: "⚠️ از کانال لفت دادید!\n📌 " + (ad.title || ad.channel_username) + "\n❌ " + reward + " امتیاز کسر شد." });
+        await tg(env.TELEGRAM_TOKEN, "sendMessage", { chat_id: parseInt(p.user_id), text: `⚠️ از کانال لفت دادید!\n📌 ${ad.title || ad.channel_username}\n❌ ${reward} امتیاز کسر شد.` });
+        
         const ownerId = ad.owner_id?.toString();
         if (ownerId && ownerId !== p.user_id) {
           const leaver = await getUser(env, p.user_id);
-          await tg(env.TELEGRAM_TOKEN, "sendMessage", { chat_id: parseInt(ownerId), text: "⚠️ کاربر لفت داد!\n📌 " + (ad.title || ad.channel_username) + "\n👤 " + (leaver?.first_name || leaver?.username || p.user_id) + "\n💰 " + reward + " به بودجه برگشت" });
+          await tg(env.TELEGRAM_TOKEN, "sendMessage", { chat_id: parseInt(ownerId), text: `⚠️ کاربر لفت داد!\n📌 ${ad.title || ad.channel_username}\n👤 ${leaver?.first_name || leaver?.username || p.user_id}\n💰 ${reward} به بودجه برگشت` });
         }
       }
     }
   }
+  
   await DB(env).prepare("UPDATE campaigns SET status = 'completed' WHERE status = 'active' AND total_budget <= spent").run();
-  // ===== Hourly activity reward + admin salary =====
+  
   const activityReward = await getSetting(env, "activity_reward", 6);
   const adminSalary = await getSetting(env, "admin_salary", 100);
-  const adminTaxShare = await getSetting(env, "admin_tax_share", 30);
   let rewarded = 0, adminPaidCount = 0;
+  
   if (activityReward > 0 || adminSalary > 0) {
     const activeUsers = await DB(env).prepare("SELECT telegram_id, last_active, last_hourly_reward, is_admin FROM users WHERE last_active >= datetime('now', '-1 hour') AND is_blocked = 0").all();
     for (const au of activeUsers.results) {
@@ -368,51 +364,31 @@ async function checkLeftMembers(env) {
       }
     }
   }
+  
   console.log("Cron: checked " + checked + ", left " + left + ", stopped " + stopped + ", hourlyCharged " + hourlyCharged + ", rewarded " + rewarded + ", adminPaid " + adminPaidCount);
   return { checked, left, stopped, hourlyCharged, rewarded, adminPaidCount };
 }
+
 // ==================== Menus ====================
 async function settingsPage(env, cid, mid, u) {
   const lbOn = u?.privacy_leaderboard === 1;
   const nameOn = u?.privacy_show_name === 1;
   const ownerOn = u?.privacy_show_owner !== 0;
   const langFa = u?.lang !== "en";
-  await edit(env, cid, mid, t(u, "settings_title") + "\n━━━━━━━━━━━━━━━━\n\n" + t(u, "privacy_title") + ":\n" + t(u, "privacy_lb") + ": " + (lbOn ? t(u,"on") : t(u,"off")) + "\n" + t(u, "privacy_name") + ": " + (nameOn ? t(u,"on") : t(u,"off")) + "\n" + t(u, "privacy_owner") + ": " + (ownerOn ? t(u,"on") : t(u,"off")) + "\n\n" + t(u, "lang_title") + ": " + (langFa ? "🇮🇷 فارسی" : "🇬🇧 English"), [
-    [{ text: t(u, "privacy_lb") + ": " + (lbOn ? t(u,"on") : t(u,"off")), callback_data: "set_priv_lb" }, { text: t(u, "privacy_name") + ": " + (nameOn ? t(u,"on") : t(u,"off")), callback_data: "set_priv_name" }],
-    [{ text: t(u, "privacy_owner") + ": " + (ownerOn ? t(u,"on") : t(u,"off")), callback_data: "set_priv_owner" }],
+  await edit(env, cid, mid, `⚙️ تنظیمات\n━━━━━━━━━━━━━━━━\n🔒 حریم خصوصی:\nنمایش در لیدربورد: ${lbOn ? "✅ روشن" : "❌ خاموش"}\nنمایش نام/آیدی: ${nameOn ? "✅ روشن" : "❌ خاموش"}\nنمایش به‌عنوان صاحب تبلیغ: ${ownerOn ? "✅ روشن" : "❌ خاموش"}\n🌐 زبان: ${langFa ? "🇮🇷 فارسی" : "🇬🇧 English"}`, [
+    [{ text: "نمایش در لیدربورد: " + (lbOn ? "✅" : "❌"), callback_data: "set_priv_lb" }, { text: "نمایش نام/آیدی: " + (nameOn ? "✅" : "❌"), callback_data: "set_priv_name" }],
+    [{ text: "نمایش صاحب تبلیغ: " + (ownerOn ? "✅" : "❌"), callback_data: "set_priv_owner" }],
     [{ text: "🇮🇷 فارسی", callback_data: "set_lang_fa" }, { text: "🇬🇧 English", callback_data: "set_lang_en" }],
-    [{ text: t(u, "back"), callback_data: "main" }],
+    [{ text: "🏠 بازگشت", callback_data: "main" }],
   ]);
 }
+
 const I18N = {
-  fa: {
-    panel: "👤 پنل کاربری", ads: "📢 تبلیغات", inbox: "📥 اینباکس", stats: "📊 آمار ربات",
-    lb: "🏆 لیدربورد", rules: "📜 قوانین", about: "ℹ️ درباره ما", tutorial: "📚 آموزش",
-    settings: "⚙️ تنظیمات", admin: "⚙️ مدیریت", back: "🏠 بازگشت",
-    balance: "💰 موجودی", earnings: "📈 کل درآمد", activity: "⏱️ فعالیت",
-    level: "سطح", xp: "📊 XP", joins: "🎯 تبلیغات انجام‌شده", my_ads: "📢 تبلیغات ایجادشده",
-    refs: "👥 دعوت‌شده‌ها", ref_income: "💵 درآمد از دعوت", share: "📤 اشتراک لینک",
-    my_subs: "👥 زیرمجموعه‌ها", txs: "🧾 تراکنش‌ها",
-    privacy_title: "🔒 حریم خصوصی", privacy_lb: "نمایش در لیدربورد", privacy_name: "نمایش نام/آیدی", privacy_owner: "نمایش به‌عنوان صاحب تبلیغ",
-    lang_title: "🌐 زبان", lang_fa: "🇮🇷 فارسی", lang_en: "🇬🇧 English",
-    settings_title: "⚙️ تنظیمات", on: "✅ روشن", off: "❌ خاموش",
-    welcome: "👋", coin: "سکه", hour: "ساعت", member: "عضو",
-  },
-  en: {
-    panel: "👤 Profile", ads: "📢 Ads", inbox: "📥 Inbox", stats: "📊 Bot Stats",
-    lb: "🏆 Leaderboard", rules: "📜 Rules", about: "ℹ️ About", tutorial: "📚 Tutorial",
-    settings: "⚙️ Settings", admin: "⚙️ Admin", back: "🏠 Back",
-    balance: "💰 Balance", earnings: "📈 Total Earnings", activity: "⏱️ Activity",
-    level: "Level", xp: "📊 XP", joins: "🎯 Joins Done", my_ads: "📢 Ads Created",
-    refs: "👥 Invited", ref_income: "💵 Referral Income", share: "📤 Share Link",
-    my_subs: "👥 Referrals", txs: "🧾 Transactions",
-    privacy_title: "🔒 Privacy", privacy_lb: "Show in Leaderboard", privacy_name: "Show Name/ID", privacy_owner: "Show as Ad Owner",
-    lang_title: "🌐 Language", lang_fa: "🇮🇷 فارسی", lang_en: "🇬🇧 English",
-    settings_title: "⚙️ Settings", on: "✅ On", off: "❌ Off",
-    welcome: "👋", coin: "coins", hour: "hours", member: "members",
-  },
+  fa: { panel: "👤 پنل کاربری", ads: "📢 تبلیغات", inbox: "📥 اینباکس", stats: "📊 آمار ربات", lb: "🏆 لیدربورد", rules: "📜 قوانین", about: "ℹ️ درباره ما", tutorial: "📚 آموزش", settings: "⚙️ تنظیمات", admin: "⚙️ مدیریت", back: "🏠 بازگشت", balance: "💰 موجودی", earnings: "📈 کل درآمد", activity: "⏱️ فعالیت", level: "سطح", xp: "📊 XP", joins: "🎯 تبلیغات انجام‌شده", my_ads: "📢 تبلیغات ایجادشده", refs: "👥 دعوت‌شده‌ها", ref_income: "💵 درآمد از دعوت", share: "📤 اشتراک لینک", my_subs: "👥 زیرمجموعه‌ها", txs: "🧾 تراکنش‌ها" },
+  en: { panel: "👤 Profile", ads: "📢 Ads", inbox: "📥 Inbox", stats: "📊 Bot Stats", lb: "🏆 Leaderboard", rules: "📜 Rules", about: "ℹ️ About", tutorial: "📚 Tutorial", settings: "⚙️ Settings", admin: "⚙️ Admin", back: "🏠 Back", balance: "💰 Balance", earnings: "📈 Total Earnings", activity: "⏱️ Activity", level: "Level", xp: "📊 XP", joins: "🎯 Joins Done", my_ads: "📢 Ads Created", refs: "👥 Invited", ref_income: "💵 Referral Income", share: "📤 Share Link", my_subs: "👥 Referrals", txs: "🧾 Transactions" },
 };
 function t(u, key) { const lang = u?.lang === 'en' ? 'en' : 'fa'; return I18N[lang]?.[key] ?? I18N.fa[key] ?? key; }
+
 async function mainMenu(env, cid, mid, u, admin) {
   const lvl = getLevel(u?.xp || 0);
   const btns = [
@@ -424,7 +400,7 @@ async function mainMenu(env, cid, mid, u, admin) {
     [{ text: t(u, "settings"), callback_data: "settings" }],
   ];
   if (admin) btns.push([{ text: "⚙️ مدیریت", callback_data: "admin" }]);
-  const text = `👋 ${u?.first_name || "کاربر"}\n\n${lvl.icon} سطح ${lvl.lvl} (${lvl.name}) | 💰 ${u?.balance || 0} | 📈 ${u?.total_earnings || 0} | 📊 XP: ${u?.xp || 0}`;
+  const text = `👋 ${u?.first_name || "کاربر"}\n${lvl.icon} سطح ${lvl.lvl} (${lvl.name}) | 💰 ${u?.balance || 0} | 📈 ${u?.total_earnings || 0} | 📊 XP: ${u?.xp || 0}`;
   if (mid) await edit(env, cid, mid, text, btns);
   else await send(env, cid, text, btns);
 }
@@ -439,16 +415,19 @@ async function userPanel(env, cid, mid, u) {
     DB(env).prepare("SELECT COUNT(*) as c FROM campaign_participants WHERE user_id = ? AND status = 'rewarded'").bind(u.telegram_id).first(),
     DB(env).prepare("SELECT COUNT(*) as c FROM campaigns WHERE owner_id = ?").bind(u.telegram_id).first(),
   ]);
+  
   let refByLine = "";
   if (u?.referred_by) {
     const refUser = await getUser(env, u.referred_by);
     if (refUser) refByLine = `\n📨 دعوت‌شده توسط: ${refUser.first_name || refUser.username || refUser.telegram_id}`;
   }
-  const txSec = txs.results.length > 0 ? "\n\n🧾 آخرین تراکنش‌ها:\n" + txs.results.map(t => fmtTx(t, false)).join("\n") : "\n\n🧾 هنوز تراکنشی ندارید";
-  const text = `👤 پنل — ${u?.first_name || "کاربر"}\n\n${lvl.icon} سطح ${lvl.lvl} — ${lvl.name}\n📊 XP: ${u?.xp || 0}${lvl.next ? ` → ${lvl.xpToNext} تا سطح بعد` : " (حداکثر)"}\n💰 موجودی: ${u?.balance || 0}\n📈 کل درآمد: ${u?.total_earnings || 0}
-⏱️ فعالیت: ${Math.round((u?.total_active_seconds || 0) / 3600)} ساعت\n🎯 تبلیغات انجام‌شده: ${parts?.c || 0}\n📢 تبلیغات ایجادشده: ${adsCreated?.c || 0}${refByLine}\n\n━━━━━━━━━━━━━\n🔗 سیستم دعوت\n👥 دعوت‌شده‌ها: ${refStats?.c || 0} نفر\n💵 درآمد از دعوت: ${refStats?.t || 0}${txSec}\n\n👇 لینک دعوت آماده‌ست`;
+  
+  const txSec = txs.results.length > 0 ? "\n🧾 آخرین تراکنش‌ها:\n" + txs.results.map(t => fmtTx(t, false)).join("\n") : "\n🧾 هنوز تراکنشی ندارید";
+  const text = `👤 پنل — ${u?.first_name || "کاربر"}\n${lvl.icon} سطح ${lvl.lvl} — ${lvl.name}\n📊 XP: ${u?.xp || 0}${lvl.next ? ` → ${lvl.xpToNext} تا سطح بعد` : " (حداکثر)"}\n💰 موجودی: ${u?.balance || 0}\n📈 کل درآمد: ${u?.total_earnings || 0}\n⏱️ فعالیت: ${Math.round((u?.total_active_seconds || 0) / 3600)} ساعت\n🎯 تبلیغات انجام‌شده: ${parts?.c || 0}\n📢 تبلیغات ایجادشده: ${adsCreated?.c || 0}${refByLine}\n━━━━━━━━━━━━━\n🔗 سیستم دعوت\n👥 دعوت‌شده‌ها: ${refStats?.c || 0} نفر\n💵 درآمد از دعوت: ${refStats?.t || 0}${txSec}\n👇 لینک دعوت آماده‌ست`;
+  
   const customShare = await getSetting(env, "referral_share_text", "");
-  const shareText = customShare ? customShare.replace(/{name}/g, u?.first_name || "رفیق").replace(/{link}/g, link) : `🚀 ${u?.first_name || "رفیق"} دعوتت می‌کنه!\n\n🎁 عضو شو، تبلیغ ببین، امتیاز بگیر!\n${link}`;
+  const shareText = customShare ? customShare.replace(/{name}/g, u?.first_name || "رفیق").replace(/{link}/g, link) : `🚀 ${u?.first_name || "رفیق"} دعوتت می‌کنه!\n🎁 عضو شو، تبلیغ ببین، امتیاز بگیر!\n${link}`;
+  
   const btns = [
     [{ text: "📤 اشتراک لینک", switch_inline_query: shareText }],
     [{ text: "👥 زیرمجموعه‌ها", callback_data: "my_refs_0" }, { text: "🧾 تراکنش‌ها", callback_data: "all_tx_0" }],
@@ -458,7 +437,6 @@ async function userPanel(env, cid, mid, u) {
   await edit(env, cid, mid, text, btns);
 }
 
-// ==================== Paginated User Lists ====================
 async function myReferrals(env, cid, mid, u, offset) {
   await paginatedList({
     env, cid, mid, title: `👥 زیرمجموعه‌های ${u?.first_name || "شما"}`,
@@ -466,7 +444,7 @@ async function myReferrals(env, cid, mid, u, offset) {
     countQuery: "SELECT COUNT(*) as c FROM referrals WHERE referrer_id = ?",
     bindParams: [u.telegram_id], prefix: `my_refs_${offset}`,
     backBtns: [[{ text: "👤 بازگشت", callback_data: "user_panel" }]],
-    formatter: (r, i) => `${i + 1}. 👤 ${r.privacy_show_name === 0 ? "کاربر مخفی" : (r.first_name || r.username || r.referred_id)}\n   💰 +${r.reward_amount} | 💼 ${r.balance || 0} | 🕐 ${fmtDate(r.created_at)}`,
+    formatter: (r, i) => `${i + 1}. 👤 ${r.privacy_show_name === 0 ? "کاربر مخفی" : (r.first_name || r.username || r.referred_id)}\n💰 +${r.reward_amount} | 💼 ${r.balance || 0} | 🕐 ${fmtDate(r.created_at)}`,
   });
 }
 
@@ -476,15 +454,15 @@ async function allTransactions(env, cid, mid, u, offset) {
     DB(env).prepare("SELECT type, amount, description, created_at, reference_id FROM transactions WHERE user_id = ? ORDER BY id DESC LIMIT ? OFFSET ?").bind(u.telegram_id, limit, offset).all(),
     DB(env).prepare("SELECT COUNT(*) as c FROM transactions WHERE user_id = ?").bind(u.telegram_id).first(),
   ]);
-  let text = "🧾 تراکنش‌ها\n━━━━━━━━━━━━━━━━\n\n";
+  let text = "🧾 تراکنش‌ها\n━━━━━━━━━━━━━━━━\n";
   const btns = [];
   if (txs.results.length === 0) { text += "تراکنشی ثبت نشده."; }
   else {
-    text += pageIndicator(offset, limit, count?.c || 0) + "\n\n";
+    text += pageIndicator(offset, limit, count?.c || 0) + "\n";
     let tin = 0, tout = 0;
     for (const t of txs.results) { t.amount > 0 ? tin += t.amount : tout += Math.abs(t.amount); }
-    text += txs.results.map(t => fmtTx(t, true)).join("\n\n");
-    text += `\n\n━━━━━━━━━━━━━━━━\n🟢 ${tin} | 🔴 ${tout} | 💰 ${tin - tout}`;
+    text += txs.results.map(t => fmtTx(t, true)).join("\n");
+    text += `\n━━━━━━━━━━━━━━━━\n🟢 ${tin} | 🔴 ${tout} | 💰 ${tin - tout}`;
   }
   const nav = pageNav("all_tx", offset, limit, txs.results.length === limit);
   if (nav.length) btns.push(...nav);
@@ -492,18 +470,17 @@ async function allTransactions(env, cid, mid, u, offset) {
   await edit(env, cid, mid, text, btns);
 }
 
-// ==================== Paginated Ads Menu ====================
 async function adsMenu(env, cid, mid, uid, offset = 0) {
   const limit = PAGE_SIZE;
   const [ads, count] = await Promise.all([
     DB(env).prepare("SELECT * FROM campaigns WHERE status = 'active' ORDER BY id DESC LIMIT ? OFFSET ?").bind(limit, offset).all(),
     DB(env).prepare("SELECT COUNT(*) as c FROM campaigns WHERE status = 'active'").first(),
   ]);
-  let text = "📢 تبلیغات فعال\n━━━━━━━━━━━━━━━━\n\n";
+  let text = "📢 تبلیغات فعال\n━━━━━━━━━━━━━━━━\n";
   const btns = [];
-  if (ads.results.length === 0) { text += "تبلیغی وجود ندارد.\n\nمی‌توانید خودتان بسازید!"; }
+  if (ads.results.length === 0) { text += "تبلیغی وجود ندارد.\nمی‌توانید خودتان بسازید!"; }
   else {
-    text += pageIndicator(offset, limit, count?.c || 0) + "\n\n";
+    text += pageIndicator(offset, limit, count?.c || 0) + "\n";
     const adIds = ads.results.map(a => a.id);
     const placeholders = adIds.map(() => "?").join(",");
     const [myParts, joinedCounts] = await Promise.all([
@@ -516,7 +493,7 @@ async function adsMenu(env, cid, mid, uid, offset = 0) {
       const pStatus = myPartMap.get(ad.id);
       const joined = joinedMap.get(ad.id) || 0;
       const st = pStatus ? (pStatus === "rewarded" ? "✅" : pStatus === "left" ? "⚠️" : "⏳") : "📝";
-      text += `${st} ${ad.title || ad.channel_username}\n   🔗 ${ad.channel_username} | 💰 ${ad.reward_per_join || 0} | 👥 ${joined}\n\n`;
+      text += `${st} ${ad.title || ad.channel_username}\n🔗 ${ad.channel_username} | 💰 ${ad.reward_per_join || 0} | 👥 ${joined}\n`;
       btns.push([{ text: `${st} ${ad.title || ad.channel_username} — 💰${ad.reward_per_join || 0}`, callback_data: `ad_view_${ad.id}` }]);
     }
   }
@@ -528,18 +505,17 @@ async function adsMenu(env, cid, mid, uid, offset = 0) {
   await edit(env, cid, mid, text, btns);
 }
 
-// ==================== Paginated My Ads ====================
 async function myAds(env, cid, mid, uid, offset = 0) {
   const limit = PAGE_SIZE;
   const [ads, count] = await Promise.all([
     DB(env).prepare("SELECT * FROM campaigns WHERE CAST(owner_id AS TEXT) = ? ORDER BY id DESC LIMIT ? OFFSET ?").bind(uid, limit, offset).all(),
     DB(env).prepare("SELECT COUNT(*) as c FROM campaigns WHERE CAST(owner_id AS TEXT) = ?").bind(uid).first(),
   ]);
-  let text = "📋 تبلیغات من\n━━━━━━━━━━━━━━━━\n\n";
+  let text = "📋 تبلیغات من\n━━━━━━━━━━━━━━━━\n";
   const btns = [];
   if (ads.results.length === 0) { text += "هنوز تبلیغی نساخته‌اید."; }
   else {
-    text += pageIndicator(offset, limit, count?.c || 0) + "\n\n";
+    text += pageIndicator(offset, limit, count?.c || 0) + "\n";
     const adIds = ads.results.map(a => a.id);
     const placeholders = adIds.map(() => "?").join(",");
     const [joinedRows, leftRows] = await Promise.all([
@@ -550,13 +526,13 @@ async function myAds(env, cid, mid, uid, offset = 0) {
     const leftMap = new Map(leftRows.results.map(l => [l.campaign_id, l.c]));
     for (const ad of ads.results) {
       const spent = ad.spent || 0, remaining = (ad.total_budget || 0) - spent;
-  const reacts = await DB(env).prepare("SELECT reaction, COUNT(*) as c FROM ad_reactions WHERE campaign_id = ? GROUP BY reaction").bind(adId).all();
-  const goodC = reacts.results.find(x => x.reaction === "good")?.c || 0;
-  const badC = reacts.results.find(x => x.reaction === "bad")?.c || 0;
+      const reacts = await DB(env).prepare("SELECT reaction, COUNT(*) as c FROM ad_reactions WHERE campaign_id = ? GROUP BY reaction").bind(ad.id).all();
+      const goodC = reacts.results.find(x => x.reaction === "good")?.c || 0;
+      const badC = reacts.results.find(x => x.reaction === "bad")?.c || 0;
       const si = ad.status === "active" ? "🟢" : ad.status === "pending" ? "⏳" : ad.status === "rejected" ? "❌" : ad.status === "stopped" ? "🛑" : "🔴";
       const joined = joinedMap.get(ad.id) || 0;
       const left = leftMap.get(ad.id) || 0;
-      text += `${si} ${ad.title || ad.channel_username}\n   🔗 ${ad.channel_username} | 💰 ${ad.total_budget || 0}→${spent}→${remaining} | 👥${joined}/⚠️${left}\n\n`;
+      text += `${si} ${ad.title || ad.channel_username}\n🔗 ${ad.channel_username} | 💰 ${ad.total_budget || 0}→${spent}→${remaining} | 👥${joined}/⚠️${left}\n`;
       btns.push([{ text: `📊 ${ad.title || ad.channel_username}`, callback_data: `ad_stats_${ad.id}` }]);
     }
   }
@@ -567,29 +543,32 @@ async function myAds(env, cid, mid, uid, offset = 0) {
   await edit(env, cid, mid, text, btns);
 }
 
-// ==================== Ad Stats Detail (with paginated participants) ====================
 async function adStatsDetail(env, cid, mid, uid, adId, partOffset = 0) {
   const ad = await DB(env).prepare("SELECT * FROM campaigns WHERE id = ? AND CAST(owner_id AS TEXT) = ?").bind(adId, uid).first();
   if (!ad) return edit(env, cid, mid, "دسترسی ندارید.", [[{ text: "📋 بازگشت", callback_data: "my_ads_0" }]]);
   const partLimit = PAGE_SIZE;
-  const [joined, left, recent, totalCount] = await Promise.all([
+  const [joined, left, recent, totalCount, reacts] = await Promise.all([
     DB(env).prepare("SELECT COUNT(*) as c FROM campaign_participants WHERE campaign_id = ? AND status = 'rewarded'").bind(adId).first(),
     DB(env).prepare("SELECT COUNT(*) as c FROM campaign_participants WHERE campaign_id = ? AND status = 'left'").bind(adId).first(),
     DB(env).prepare("SELECT cp.user_id, cp.status, u.first_name, u.username FROM campaign_participants cp LEFT JOIN users u ON cp.user_id = u.telegram_id WHERE cp.campaign_id = ? ORDER BY cp.joined_at DESC LIMIT ? OFFSET ?").bind(adId, partLimit, partOffset).all(),
     DB(env).prepare("SELECT COUNT(*) as c FROM campaign_participants WHERE campaign_id = ?").bind(adId).first(),
+    DB(env).prepare("SELECT reaction, COUNT(*) as c FROM ad_reactions WHERE campaign_id = ? GROUP BY reaction").bind(adId).all(),
   ]);
   const spent = ad.spent || 0, remaining = (ad.total_budget || 0) - spent;
-  let text = `📊 آمار: ${ad.title || ad.channel_username}\n━━━━━━━━━━━━━━━━\n\n`;
-  text += `🔗 ${ad.channel_username}\n📊 ${ad.status === "active" ? "🟢 فعال" : ad.status === "stopped" ? "🛑 متوقف‌شده (ربات ادمین نیست)" : ad.status}\n💰 بودجه: ${ad.total_budget || 0} | 💸 ${spent} | 💵 ${remaining}\n⏰ ساعتی: ${ad.hourly_cost || 0}/ساعت | پرداخت‌شده: ${ad.hourly_paid || 0}\n👥 ${joined?.c || 0} | ⚠️ ${left?.c || 0}\n👍 ${goodC} | 👎 ${badC}\n`;
+  const goodC = reacts.results.find(x => x.reaction === "good")?.c || 0;
+  const badC = reacts.results.find(x => x.reaction === "bad")?.c || 0;
+  
+  let text = `📊 آمار: ${ad.title || ad.channel_username}\n━━━━━━━━━━━━━━━━\n`;
+  text += `🔗 ${ad.channel_username}\n📊 ${ad.status === "active" ? "🟢 فعال" : ad.status === "stopped" ? "🛑 متوقف‌شده" : ad.status}\n💰 بودجه: ${ad.total_budget || 0} | 💸 ${spent} | 💵 ${remaining}\n⏰ ساعتی: ${ad.hourly_cost || 0}/ساعت | پرداخت‌شده: ${ad.hourly_paid || 0}\n👥 ${joined?.c || 0} | ⚠️ ${left?.c || 0}\n👍 ${goodC} | 👎 ${badC}\n`;
+  
   if (recent.results.length > 0) {
     text += `\n📋 شرکت‌کنندگان ${pageIndicator(partOffset, partLimit, totalCount?.c || 0)}:\n`;
     recent.results.forEach((r, i) => {
       const st = r.status === "rewarded" ? "✅" : r.status === "left" ? "⚠️" : "⏳";
       text += `${partOffset + i + 1}. ${st} ${r.first_name || r.username || r.user_id}\n`;
     });
-  } else if (totalCount?.c > 0) {
-    text += `\n📋 شرکت‌کنندگان (${pageIndicator(partOffset, partLimit, totalCount?.c || 0)}):\nاین صفحه خالی است.\n`;
   }
+  
   const btns = [];
   const partNav = pageNav(`ad_part_${adId}`, partOffset, partLimit, recent.results.length === partLimit);
   if (partNav.length) btns.push(...partNav);
@@ -599,7 +578,6 @@ async function adStatsDetail(env, cid, mid, uid, adId, partOffset = 0) {
   await edit(env, cid, mid, text, btns);
 }
 
-// ==================== Leaderboard (Multi-Category) ====================
 const LB_CATEGORIES = [
   { key: "earnings", label: "💰 بیشترین درآمد", icon: "💰", desc: "کل درآمد" },
   { key: "referrals", label: "👥 بیشترین رفرال", icon: "👥", desc: "تعداد دعوت" },
@@ -615,7 +593,6 @@ async function leaderboard(env, cid, mid, param) {
   const category = parts[0] || "earnings";
   const offset = parseInt(parts[1] || "0") || 0;
   const limit = PAGE_SIZE;
-
   let query, countQuery, valueIcon;
   
   if (category === "earnings") {
@@ -645,25 +622,24 @@ async function leaderboard(env, cid, mid, param) {
   } else {
     return leaderboard(env, cid, mid, "earnings_0");
   }
-
+  
   const [lb, total] = await Promise.all([
     DB(env).prepare(query).bind(limit, offset).all(),
     DB(env).prepare(countQuery).first(),
   ]);
-
+  
   const cat = LB_CATEGORIES.find(c => c.key === category) || LB_CATEGORIES[0];
-  let text = "🏆 لیدربورد — " + cat.label + "\n━━━━━━━━━━━━━━━━\n\n";
+  let text = "🏆 لیدربورد — " + cat.label + "\n━━━━━━━━━━━━━━━━\n";
   const btns = [];
-
   const catBtns = LB_CATEGORIES.map(function(c) {
     return { text: category === c.key ? "✅ " + c.icon : c.icon, callback_data: "lb_" + c.key + "_0" };
   });
   for (let i = 0; i < catBtns.length; i += 2) btns.push([catBtns[i], catBtns[i + 1]]);
-
+  
   if (lb.results.length === 0) {
     text += "هنوز کسی در این دسته‌بندی نیست.";
   } else {
-    text += pageIndicator(offset, limit, total?.c || 0) + "\n\n";
+    text += pageIndicator(offset, limit, total?.c || 0) + "\n";
     lb.results.forEach(function(u, i) {
       const rank = offset + i;
       const name = u.privacy_show_name ? (u.first_name || u.username || "کاربر " + (rank + 1)) : "کاربر " + (rank + 1);
@@ -673,19 +649,18 @@ async function leaderboard(env, cid, mid, param) {
       text += medal + " " + lvl.icon + " " + name + " — " + valueIcon + " " + displayVal + "\n";
     });
   }
-
+  
   const nav = pageNav("lb_" + category, offset, limit, lb.results.length === limit);
   if (nav.length) btns.push(...nav);
   btns.push([{ text: "🏠 بازگشت", callback_data: "main" }]);
   await edit(env, cid, mid, text, btns);
 }
 
-// ==================== About / Tutorial / Likes ====================
 async function aboutPage(env, cid, mid) {
   const content = await getSetting(env, "about_text", "");
   const likes = await DB(env).prepare("SELECT COUNT(*) as c FROM page_likes WHERE page_key = 'about'").first();
-  const defaultText = "ℹ️ درباره ما\n\n🤖 ربات تبلیغات و کسب درآمد تلگرام\n\n🎯 هدف: تبلیغ کانال‌ها + کسب درآمد برای کاربران\n\n📢 صاحب کانال: تبلیغ بساز، عضو بگیر\n💰 کاربر: عضو شو، پاداش بگیر\n👥 دعوت دوستان = درآمد بیشتر\n\n🔒 ما حریم خصوصی شما را محترم می‌شماریم.";
-  const text = (content || defaultText) + "\n\n👍 " + (likes?.c || 0) + " نفر این صفحه را مفید دانستند";
+  const defaultText = "ℹ️ درباره ما\n🤖 ربات تبلیغات و کسب درآمد تلگرام\n🎯 هدف: تبلیغ کانال‌ها + کسب درآمد برای کاربران\n📢 صاحب کانال: تبلیغ بساز، عضو بگیر\n💰 کاربر: عضو شو، پاداش بگیر\n👥 دعوت دوستان = درآمد بیشتر\n🔒 ما حریم خصوصی شما را محترم می‌شماریم.";
+  const text = (content || defaultText) + "\n👍 " + (likes?.c || 0) + " نفر این صفحه را مفید دانستند";
   await edit(env, cid, mid, text, [
     [{ text: "👍 مفید بود", callback_data: "like_about" }],
     [{ text: "🏠 بازگشت", callback_data: "main" }],
@@ -698,8 +673,8 @@ async function tutorialPage(env, cid, mid) {
   const cost = await getSetting(env, "ad_cost_per_join", 10);
   const taxP = await getSetting(env, "ad_tax_percent", 5);
   const refP = await getSetting(env, "referral_percent", 20);
-  const defaultText = "📚 آموزش ربات\n\n1️⃣ تبلیغ زدن:\n• 📢 منو → ایجاد تبلیغ\n• آیدی کانال + عنوان + بودجه\n• ربات باید ادمین کانال باشد\n• هزینه/عضو: " + cost + " | مالیات: " + taxP + "%\n\n2️⃣ عضویت و درآمد:\n• 📢 تبلیغات → انتخاب کانال\n• عضو شو → ✅ بررسی → پاداش بگیر\n• ⚠️ لفت = کسر خودکار\n\n3️⃣ دعوت دوستان:\n• 👤 پنل → لینک دعوت\n• سهم شما: " + refP + "% از درآمد هر دعوتی\n\n4️⃣ سطح (XP):\n• هر عضویت = 10 XP\n• سطوح بالاتر = مزایا";
-  const text = (content || defaultText) + "\n\n👍 " + (likes?.c || 0) + " نفر این آموزش را مفید دانستند";
+  const defaultText = `📚 آموزش ربات\n1️⃣ تبلیغ زدن:\n• 📢 منو → ایجاد تبلیغ\n• آیدی کانال + عنوان + بودجه\n• ربات باید ادمین کانال باشد\n• هزینه/عضو: ${cost} | مالیات: ${taxP}%\n2️⃣ عضویت و درآمد:\n• 📢 تبلیغات → انتخاب کانال\n• عضو شو → ✅ بررسی → پاداش بگیر\n• ⚠️ لفت = کسر خودکار\n3️⃣ دعوت دوستان:\n• 👤 پنل → لینک دعوت\n• سهم شما: ${refP}% از درآمد هر دعوتی\n4️⃣ سطح (XP):\n• هر عضویت = 10 XP\n• سطوح بالاتر = مزایا`;
+  const text = (content || defaultText) + "\n👍 " + (likes?.c || 0) + " نفر این آموزش را مفید دانستند";
   await edit(env, cid, mid, text, [
     [{ text: "👍 مفید بود", callback_data: "like_tutorial" }],
     [{ text: "🏠 بازگشت", callback_data: "main" }],
@@ -721,17 +696,19 @@ async function handleLike(env, cb, uid, pageKey) {
     return alert(env, cb.id, "شما قبلا لایک کرده‌اید!\n👍 مجموع: " + (likes?.c || 0) + " نفر این صفحه را مفید دانستند.", true);
   }
 }
+
 async function adminTutorialPage(env, cid, mid) {
   const content = await getSetting(env, "admin_tutorial_text", "");
   const likes = await DB(env).prepare("SELECT COUNT(*) as c FROM page_likes WHERE page_key = 'admin_tutorial'").first();
-  const defaultText = "📖 آموزش ادمین\n━━━━━━━━━━━━━━━━\n\n📊 آمار: دیدن کاربران، تبلیغات، مالیات\n👥 کاربران: جستجو، مسدود/رفع، تنظیم موجودی\n📢 همگانی: پیام به اینباکس همه کاربران\n📋 تایید: تایید/رد تبلیغ (رد = بازگشت وجه)\n💰 مالی: قیمت، مالیات، رفرال، هزینه ساعتی\n📝 محتوا: ویرایش درباره ما/آموزش/قوانین\n🎭 دسترسی: نقش‌ها و سطوح ادمین\n🚫 مسدود تبلیغ: جلوگیری از تبلیغ‌گذاری\n\n💡 نکته: همیشه قبل از تایید تبلیغ، محتوای کانال را بررسی کنید تا خلاف قوانین تلگرام نباشد.";
-  const text = (content || defaultText) + "\n\n👍 " + (likes?.c || 0) + " نفر این آموزش را مفید دانستند";
+  const defaultText = "📖 آموزش ادمین\n━━━━━━━━━━━━━━━━\n📊 آمار: دیدن کاربران، تبلیغات، مالیات\n👥 کاربران: جستجو، مسدود/رفع، تنظیم موجودی\n📢 همگانی: پیام به اینباکس همه کاربران\n📋 تایید: تایید/رد تبلیغ (رد = بازگشت وجه)\n💰 مالی: قیمت، مالیات، رفرال، هزینه ساعتی\n📝 محتوا: ویرایش درباره ما/آموزش/قوانین\n🎭 دسترسی: نقش‌ها و سطوح ادمین\n🚫 مسدود تبلیغ: جلوگیری از تبلیغ‌گذاری\n💡 نکته: همیشه قبل از تایید تبلیغ، محتوای کانال را بررسی کنید.";
+  const text = (content || defaultText) + "\n👍 " + (likes?.c || 0) + " نفر این آموزش را مفید دانستند";
   await edit(env, cid, mid, text, [
     [{ text: "👍 مفید بود", callback_data: "like_admin_tutorial" }],
     [{ text: "✏️ ویرایش", callback_data: "admin_edit_admin_tutorial" }],
     [{ text: "📝 بازگشت", callback_data: "admin_content" }],
   ]);
 }
+
 async function adminContent(env, cid, mid) {
   const [about, tutorial, likeReward] = await Promise.all([
     getSetting(env, "about_text", ""),
@@ -740,29 +717,29 @@ async function adminContent(env, cid, mid) {
   ]);
   const aboutPreview = about ? (about.substring(0, 80) + (about.length > 80 ? "..." : "")) : "(پیش‌فرض)";
   const tutorialPreview = tutorial ? (tutorial.substring(0, 80) + (tutorial.length > 80 ? "..." : "")) : "(پیش‌فرض)";
-  await edit(env, cid, mid, "📝 مدیریت محتوا\n\nℹ️ درباره ما:\n" + aboutPreview + "\n\n📚 آموزش:\n" + tutorialPreview + "\n\n💰 پاداش لایک: " + likeReward + " امتیاز", [
+  await edit(env, cid, mid, `📝 مدیریت محتوا\nℹ️ درباره ما:\n${aboutPreview}\n📚 آموزش:\n${tutorialPreview}\n💰 پاداش لایک: ${likeReward} امتیاز`, [
     [{ text: "✏️ ویرایش درباره ما", callback_data: "admin_edit_about" }, { text: "✏️ ویرایش آموزش", callback_data: "admin_edit_tutorial" }],
     [{ text: "📖 آموزش ادمین", callback_data: "admin_tutorial" }, { text: "💰 پاداش لایک", callback_data: "admin_set_likereward" }],
     [{ text: "👁️ درباره ما", callback_data: "about" }, { text: "👁️ آموزش", callback_data: "tutorial" }],
     [{ text: "⚙️ بازگشت", callback_data: "admin" }],
   ]);
 }
-// ==================== Inbox / Stats ====================
+
 async function inboxMenu(env, cid, mid, u, offset) {
   const limit = PAGE_SIZE;
   const [msgs, count] = await Promise.all([
     DB(env).prepare("SELECT * FROM inbox_messages ORDER BY id DESC LIMIT ? OFFSET ?").bind(limit, offset).all(),
     DB(env).prepare("SELECT COUNT(*) as c FROM inbox_messages").first(),
   ]);
-  let text = "📥 اینباکس\n━━━━━━━━━━━━━━━━\n\n" + (u?.inbox_muted ? "🔇 بی‌صدا" : "🔔 صدادار") + "\n\n";
+  let text = "📥 اینباکس\n━━━━━━━━━━━━━━━━\n" + (u?.inbox_muted ? "🔇 بی‌صدا" : "🔔 صدادار") + "\n";
   const btns = [];
   if (msgs.results.length === 0) { text += "پیامی نیست."; }
   else {
-    text += pageIndicator(offset, limit, count?.c || 0) + "\n\n";
+    text += pageIndicator(offset, limit, count?.c || 0) + "\n";
     for (const m of msgs.results) {
       const likes = await DB(env).prepare("SELECT COUNT(*) as c FROM inbox_likes WHERE message_id = ?").bind(m.id).first();
       const liked = await DB(env).prepare("SELECT 1 as x FROM inbox_likes WHERE message_id = ? AND user_id = ?").bind(m.id, u.telegram_id).first();
-      text += "📢 " + m.text + "\n👤 " + (m.admin_name || "ادمین") + " | 🕐 " + fmtDate(m.created_at) + " | 👍 " + (likes?.c || 0) + (liked ? " ✅" : "") + "\n\n";
+      text += "📢 " + m.text + "\n👤 " + (m.admin_name || "ادمین") + " | 🕐 " + fmtDate(m.created_at) + " | 👍 " + (likes?.c || 0) + (liked ? " ✅" : "") + "\n";
       btns.push([{ text: (liked ? "✅ لایک شد" : "👍 مفید بود") + " (" + (likes?.c || 0) + ")", callback_data: "inbox_like_" + m.id }]);
     }
   }
@@ -811,22 +788,23 @@ async function botStats(env, cid, mid) {
     DB(env).prepare("SELECT COALESCE(AVG(total_active_seconds), 0) as t FROM users").first(),
   ]);
   const total = users?.c || 0;
-  const text = "📊 آمار ربات\n━━━━━━━━━━━━━━━━\n\n👥 کل کاربران: " + total + "\n⚠️ لفت‌داده‌ها: " + (left?.c || 0) + "\n📢 تبلیغات فعال: " + (activeAds?.c || 0) + "\n⏳ در انتظار: " + (pendingAds?.c || 0) + "\n🛑 متوقف: " + (stoppedAds?.c || 0) + "\n✅ تکمیل: " + (completedAds?.c || 0) + "\n❌ ردشده: " + (rejectedAds?.c || 0) + "\n💰 در چرخش: " + (balances?.t || 0) + "\n💵 پرداختی ادمین: " + (adminPaid?.t || 0) + "\n\n🛡️ ادمین‌ها:\nآنلاین (۱ دقیقه): " + (activeAdminsNow?.c || 0) + "\nامروز: " + (activeAdminsToday?.c || 0) + "\nاین هفته: " + (activeAdminsWeek?.c || 0) + "\n\n🎯 پاداش فعالیت/ساعت: " + (await getSetting(env, "activity_reward", 6)) + " سکه\n💼 حقوق ادمین/ساعت: " + (await getSetting(env, "admin_salary", 100)) + " سکه\n📊 سهم ادمین از مالیات: " + (await getSetting(env, "admin_tax_share", 30)) + "%\n\n🕐 فعالیت کاربران:\nامروز: " + (activeToday?.c || 0) + " فعال | " + (total - (activeToday?.c || 0)) + " غیرفعال\nاین هفته: " + (activeWeek?.c || 0) + " فعال | " + (total - (activeWeek?.c || 0)) + " غیرفعال\nاین ماه: " + (activeMonth?.c || 0) + " فعال | " + (total - (activeMonth?.c || 0)) + " غیرفعال\n⏱️ میانگین فعالیت هر کاربر: " + Math.round((avgActive?.t || 0) / 3600) + " ساعت";
+  const text = `📊 آمار ربات\n━━━━━━━━━━━━━━━━\n👥 کل کاربران: ${total}\n⚠️ لفت‌داده‌ها: ${(left?.c || 0)}\n📢 تبلیغات فعال: ${(activeAds?.c || 0)}\n⏳ در انتظار: ${(pendingAds?.c || 0)}\n🛑 متوقف: ${(stoppedAds?.c || 0)}\n✅ تکمیل: ${(completedAds?.c || 0)}\n❌ ردشده: ${(rejectedAds?.c || 0)}\n💰 در چرخش: ${(balances?.t || 0)}\n💵 پرداختی ادمین: ${(adminPaid?.t || 0)}\n🛡️ ادمین‌ها:\nآنلاین (۱ دقیقه): ${(activeAdminsNow?.c || 0)}\nامروز: ${(activeAdminsToday?.c || 0)}\nاین هفته: ${(activeAdminsWeek?.c || 0)}\n🎯 پاداش فعالیت/ساعت: ${await getSetting(env, "activity_reward", 6)} سکه\n💼 حقوق ادمین/ساعت: ${await getSetting(env, "admin_salary", 100)} سکه\n📊 سهم ادمین از مالیات: ${await getSetting(env, "admin_tax_share", 30)}%\n🕐 فعالیت کاربران:\nامروز: ${(activeToday?.c || 0)} فعال | ${total - (activeToday?.c || 0)} غیرفعال\nاین هفته: ${(activeWeek?.c || 0)} فعال | ${total - (activeWeek?.c || 0)} غیرفعال\nاین ماه: ${(activeMonth?.c || 0)} فعال | ${total - (activeMonth?.c || 0)} غیرفعال\n⏱️ میانگین فعالیت هر کاربر: ${Math.round((avgActive?.t || 0) / 3600)} ساعت`;
   await edit(env, cid, mid, text, [[{ text: "🏠 بازگشت", callback_data: "main" }]]);
 }
+
 async function rules(env, cid, mid) {
   const r = await DB(env).prepare("SELECT content FROM rules WHERE is_active = 1 ORDER BY version DESC LIMIT 1").first();
   const rp = await getSetting(env, "referral_percent", 20);
   const taxP = await getSetting(env, "ad_tax_percent", 5);
   const likes = await DB(env).prepare("SELECT COUNT(*) as c FROM page_likes WHERE page_key = 'rules'").first();
-  const defaultText = "📜 قوانین استفاده از ربات\n━━━━━━━━━━━━━━━━\n\n✅ تبلیغ‌گذاری:\n• ربات باید ادمین کانال شما باشد\n• محتوای تبلیغ باید مطابق قوانین تلگرام و اصول انسانی باشد\n• تبلیغ نامناسب: بار اول اخطار + رد، بار دوم مسدودیت از تبلیغ‌گذاری\n\n🔒 حریم خصوصی:\n• اطلاعات شما محفوظ است و فقط در موارد قانونی/دولتی یا شرایط اضطراری منتقل می‌شود\n• عضویت در گروه/کانال‌ها و محتوای آن‌ها به ما ربطی ندارد\n\n⚠️ رفتار کاربران:\n• لفت دادن = کسر خودکار پاداش\n• تبلیغ نامناسب؟ 👎 بزنید تا ادمین‌ها مطلع شوند یا ⏭️ رد شوید\n\n📌 استفاده از ربات = پذیرش تمام قوانین\nما زیر نظر قوانین تلگرام فعالیت می‌کنیم:\ntelegram.org/privacy-tpa\n\n💰 مالیات: " + taxP + "% | سهم معرف: " + rp + "%";
-  const text = (r?.content || defaultText) + "\n\n👍 " + (likes?.c || 0) + " نفر این قوانین را مفید دانستند";
+  const defaultText = `📜 قوانین استفاده از ربات\n━━━━━━━━━━━━━━━━\n✅ تبلیغ‌گذاری:\n• ربات باید ادمین کانال شما باشد\n• محتوای تبلیغ باید مطابق قوانین تلگرام و اصول انسانی باشد\n• تبلیغ نامناسب: بار اول اخطار + رد، بار دوم مسدودیت از تبلیغ‌گذاری\n🔒 حریم خصوصی:\n• اطلاعات شما محفوظ است و فقط در موارد قانونی/دولتی یا شرایط اضطراری منتقل می‌شود\n• عضویت در گروه/کانال‌ها و محتوای آن‌ها به ما ربطی ندارد\n⚠️ رفتار کاربران:\n• لفت دادن = کسر خودکار پاداش\n• تبلیغ نامناسب؟ 👎 بزنید تا ادمین‌ها مطلع شوند یا ⏭️ رد شوید\n📌 استفاده از ربات = پذیرش تمام قوانین\nما زیر نظر قوانین تلگرام فعالیت می‌کنیم:\ntelegram.org/privacy-tpa\n💰 مالیات: ${taxP}% | سهم معرف: ${rp}%`;
+  const text = (r?.content || defaultText) + "\n👍 " + (likes?.c || 0) + " نفر این قوانین را مفید دانستند";
   await edit(env, cid, mid, text, [
     [{ text: "👍 مفید بود", callback_data: "like_rules" }],
     [{ text: "🏠 بازگشت", callback_data: "main" }],
   ]);
 }
-// ==================== Campaign Actions ====================
+
 async function cancelCampaign(env, cid, mid, uid, adId) {
   const ad = await DB(env).prepare("SELECT * FROM campaigns WHERE id = ? AND CAST(owner_id AS TEXT) = ?").bind(adId, uid).first();
   if (!ad) return edit(env, cid, mid, "دسترسی ندارید.", [[{ text: "📋 بازگشت", callback_data: "my_ads_0" }]]);
@@ -842,19 +820,19 @@ async function cancelCampaign(env, cid, mid, uid, adId) {
     await addTx(env, uid, "ad_refund", totalRefund, `بازگشت - لغو: ${ad.title || ad.channel_username}`, refId);
     await logTax(env, adId, uid, -refundTax, "cancel_refund");
   }
-  await edit(env, cid, mid, `🛑 لغو شد!\n\n📌 ${ad.title || ad.channel_username}\n💸 خرج: ${spent} | 💵 باقی: ${remaining} | 💰 بازگشت: ${totalRefund}${refId ? `\n🔖 ${refId}` : ""}`, [[{ text: "📋 بازگشت", callback_data: "my_ads_0" }]]);
+  await edit(env, cid, mid, `🛑 لغو شد!\n📌 ${ad.title || ad.channel_username}\n💸 خرج: ${spent} | 💵 باقی: ${remaining} | 💰 بازگشت: ${totalRefund}${refId ? `\n🔖 ${refId}` : ""}`, [[{ text: "📋 بازگشت", callback_data: "my_ads_0" }]]);
 }
 
 async function renewCampaign(env, cid, mid, uid, adId) {
   const ad = await DB(env).prepare("SELECT * FROM campaigns WHERE id = ? AND CAST(owner_id AS TEXT) = ?").bind(adId, uid).first();
   if (!ad) return edit(env, cid, mid, "دسترسی ندارید.", [[{ text: "📋 بازگشت", callback_data: "my_ads_0" }]]);
   if (!["active", "cancelled", "completed", "stopped"].includes(ad.status)) return edit(env, cid, mid, "قابل تمدید نیست.", [[{ text: "📋 بازگشت", callback_data: "my_ads_0" }]]);
-  if (!(await checkBotAdmin(env, ad.channel_username))) return edit(env, cid, mid, "❌ ربات ادمین کانال نیست!\n\nابتدا ربات را دوباره ادمین کنید.", [[{ text: "📋 بازگشت", callback_data: "my_ads_0" }]]);
+  if (!(await checkBotAdmin(env, ad.channel_username))) return edit(env, cid, mid, "❌ ربات ادمین کانال نیست!\nابتدا ربات را دوباره ادمین کنید.", [[{ text: "📋 بازگشت", callback_data: "my_ads_0" }]]);
   const cost = await getSetting(env, "ad_cost_per_join", 10);
   const taxP = await getSetting(env, "ad_tax_percent", 5);
   const currentBudget = (ad.total_budget || 0) - (ad.spent || 0);
   await setState(env, uid, "renew_ad_budget", { adId, addedBudget: 0 });
-  await edit(env, cid, mid, `🔄 تمدید: ${ad.title || ad.channel_username}\n🔗 ${ad.channel_username}\n💰 باقی‌مانده: ${currentBudget}\n📊 هزینه/عضو: ${cost} | 💰 مالیات: ${taxP}%\n\nافزایش بودجه:`, [
+  await edit(env, cid, mid, `🔄 تمدید: ${ad.title || ad.channel_username}\n🔗 ${ad.channel_username}\n💰 باقی‌مانده: ${currentBudget}\n📊 هزینه/عضو: ${cost} | 💰 مالیات: ${taxP}%\nافزایش بودجه:`, [
     [{ text: "➕100", callback_data: "renew_add_100" }, { text: "➕500", callback_data: "renew_add_500" }, { text: "➕1000", callback_data: "renew_add_1000" }],
     [{ text: "❌ انصراف", callback_data: "my_ads_0" }],
   ]);
@@ -871,7 +849,7 @@ async function handleRenewBudget(env, cb, u, uid, cid, mid, data) {
   const tax = Math.ceil(d.addedBudget * (taxP / 100));
   const total = d.addedBudget + tax;
   const ok = u.balance >= total;
-  let text = `🔄 تمدید\n\n💵 بودجه: ${d.addedBudget}\n• مالیات (${taxP}%): ${tax}\n${ok || d.addedBudget === 0 ? `• کل: ${total} ✅` : `• کل: ${total} ❌ (کمبود: ${total - u.balance})`}`;
+  let text = `🔄 تمدید\n💵 بودجه: ${d.addedBudget}\n• مالیات (${taxP}%): ${tax}\n${ok || d.addedBudget === 0 ? `• کل: ${total} ✅` : `• کل: ${total} ❌ (کمبود: ${total - u.balance})`}`;
   const btns = budgetButtons("renew", d.addedBudget, ok);
   if (ok || d.addedBudget === 0) btns.push([{ text: "✅ تایید", callback_data: "renew_confirm" }]);
   btns.push([{ text: "❌ انصراف", callback_data: "my_ads_0" }]);
@@ -899,7 +877,6 @@ async function confirmRenew(env, cb, u, uid, cid, mid) {
   await edit(env, cid, mid, `✅ تمدید شد!\n📌 ${ad.title || ad.channel_username}\n💰 بودجه جدید: ${newBudget}\n🔖 ${refId}`, [[{ text: "📋 بازگشت", callback_data: "my_ads_0" }]]);
 }
 
-// ==================== Ad Creation ====================
 async function handleAdMessage(env, chat, u, uid, text) {
   if (text === "❌ انصراف") { await clearState(env, uid); await send(env, chat.id, "❌ لغو شد."); return true; }
   if (u?.user_state === "create_ad_channel") {
@@ -912,14 +889,14 @@ async function handleAdMessage(env, chat, u, uid, text) {
     const status = member?.result?.status;
     if (status !== "administrator" && status !== "creator") {
       await setState(env, uid, "create_ad_channel", { channel: text, pending: true });
-      await send(env, chat.id, "⚠️ ربات هنوز ادمین کانال نیست!\n\n1️⃣ ربات را به کانال اضافه کنید:\nhttps://t.me/" + botU + "?startchannel=admin\n\n2️⃣ ربات را با دسترسی کامل ادمین کنید.\n\nسپس دکمه زیر را بزنید:", [
+      await send(env, chat.id, `⚠️ ربات هنوز ادمین کانال نیست!\n1️⃣ ربات را به کانال اضافه کنید:\nhttps://t.me/${botU}?startchannel=admin\n2️⃣ ربات را با دسترسی کامل ادمین کنید.\nسپس دکمه زیر را بزنید:`, [
         [{ text: "✅ بررسی دوباره", callback_data: "ad_chcheck" }],
         [{ text: "❌ انصراف", callback_data: "ad_cancel" }],
       ]);
       return true;
     }
     await setState(env, uid, "create_ad_title", { channel: text, budget: 0 });
-    await send(env, chat.id, "✅ کانال: " + text + "\n\n✅ ربات ادمین کانال است.\n\nعنوان تبلیغ:", [[{ text: "❌ انصراف", callback_data: "ad_cancel" }]]);
+    await send(env, chat.id, `✅ کانال: ${text}\n✅ ربات ادمین کانال است.\nعنوان تبلیغ:`, [[{ text: "❌ انصراف", callback_data: "ad_cancel" }]]);
     return true;
   }
   if (u?.user_state === "create_ad_title") {
@@ -927,7 +904,7 @@ async function handleAdMessage(env, chat, u, uid, text) {
     try { d = JSON.parse(u.state_data || "{}"); } catch { d = { channel: "" }; }
     d.title = text;
     await setState(env, uid, "create_ad_hourly", d);
-    await send(env, chat.id, "✅ عنوان ثبت شد.\n\n⏰ هزینه ساعتی تبلیغ:\n\nمبلغی که هر ساعت از بودجه کسر می‌شود.\n0 = بدون هزینه ساعتی\n\nمثال: 60 یعنی 60 امتیاز در ساعت\n\nعدد وارد کنید:", [[{ text: "⏭️ بدون هزینه ساعتی (0)", callback_data: "ad_hourly_skip" }], [{ text: "❌ انصراف", callback_data: "ad_cancel" }]]);
+    await send(env, chat.id, "✅ عنوان ثبت شد.\n⏰ هزینه ساعتی تبلیغ:\nمبلغی که هر ساعت از بودجه کسر می‌شود.\n0 = بدون هزینه ساعتی\nمثال: 60 یعنی 60 امتیاز در ساعت\nعدد وارد کنید:", [[{ text: "⏭️ بدون هزینه ساعتی (0)", callback_data: "ad_hourly_skip" }], [{ text: "❌ انصراف", callback_data: "ad_cancel" }]]);
     return true;
   }
   if (u?.user_state === "create_ad_hourly") {
@@ -938,7 +915,7 @@ async function handleAdMessage(env, chat, u, uid, text) {
     d.hourlyCost = v;
     await setState(env, uid, "create_ad_budget", d);
     const cost = await getSetting(env, "ad_cost_per_join", 10);
-    await send(env, chat.id, "✅ هزینه ساعتی: " + v + (v > 0 ? " امتیاز/ساعت" : " (بدون هزینه ساعتی)") + "\n💰 هزینه/عضو: " + cost + "\n\nبودجه را انتخاب کنید:", [
+    await send(env, chat.id, `✅ هزینه ساعتی: ${v}${v > 0 ? " امتیاز/ساعت" : " (بدون هزینه ساعتی)"}\n💰 هزینه/عضو: ${cost}\nبودجه را انتخاب کنید:`, [
       [{ text: "➕100", callback_data: "bud_add_100" }, { text: "➕500", callback_data: "bud_add_500" }, { text: "➕1000", callback_data: "bud_add_1000" }],
       [{ text: "❌ انصراف", callback_data: "ad_cancel" }],
     ]);
@@ -960,7 +937,7 @@ async function handleBudget(env, cb, u, uid, cid, mid, data) {
   const btns = budgetButtons("bud", d.budget, ok);
   if (ok || d.budget === 0) btns.push([{ text: "✅ ثبت نهایی", callback_data: "bud_confirm" }]);
   btns.push([{ text: "❌ انصراف", callback_data: "ad_cancel" }]);
-  await edit(env, cid, mid, text + "\n\nاز دکمه‌ها استفاده کنید:", btns);
+  await edit(env, cid, mid, text + "\nاز دکمه‌ها استفاده کنید:", btns);
 }
 
 async function confirmAd(env, cb, u, uid, cid, mid) {
@@ -977,19 +954,19 @@ async function confirmAd(env, cb, u, uid, cid, mid) {
   await addTx(env, uid, "ad_creation", -total, `کمپین: ${d.title} (بودجه: ${d.budget}, مالیات: ${tax})`, refId);
   await logTax(env, null, uid, tax, "creation");
   await DB(env).prepare("INSERT INTO campaigns (owner_id, channel_username, title, description, reward_per_join, total_budget, tax_percent, hourly_cost, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')").bind(uid, d.channel, d.title, "عضو شوید و پاداش بگیرید", await getSetting(env, "ad_cost_per_join", 10), d.budget, taxP, d.hourlyCost || 0).run();
-  await send(env, cid, "✅ کمپین ثبت شد!\n\n📌 " + d.title + "\n🔗 " + d.channel + "\n💰 بودجه: " + d.budget + " | مالیات: " + tax + " | کل: " + total + (d.hourlyCost ? "\n⏰ هزینه ساعتی: " + d.hourlyCost + "/ساعت" : "") + "\n🔖 " + refId + "\n\nوضعیت: در انتظار تایید", [[{ text: "👤 پنل", callback_data: "user_panel" }]]);
+  await send(env, cid, `✅ کمپین ثبت شد!\n📌 ${d.title}\n🔗 ${d.channel}\n💰 بودجه: ${d.budget} | مالیات: ${tax} | کل: ${total}${d.hourlyCost ? `\n⏰ هزینه ساعتی: ${d.hourlyCost}/ساعت` : ""}\n🔖 ${refId}\nوضعیت: در انتظار تایید`, [[{ text: "👤 پنل", callback_data: "user_panel" }]]);
 }
 
-// ==================== Ad View/Join ====================
 async function handleAdView(env, cid, mid, uid, adId) {
   const ad = await DB(env).prepare("SELECT * FROM campaigns WHERE id = ? AND status = 'active'").bind(adId).first();
   if (!ad) return edit(env, cid, mid, "این تبلیغ غیرفعال است.", [[{ text: "🏠 بازگشت", callback_data: "ads_menu" }]]);
   if (!(await checkBotAdmin(env, ad.channel_username))) {
-    return edit(env, cid, mid, "🛑 این تبلیغ موقتاً متوقف شده است.\n\n❌ دلیل: ربات ادمین کانال نیست.\n\n💡 این مشکل به صاحب تبلیغ اطلاع داده خواهد شد.", [[{ text: "🏠 بازگشت", callback_data: "ads_menu" }]]);
+    return edit(env, cid, mid, "🛑 این تبلیغ موقتاً متوقف شده است.\n❌ دلیل: ربات ادمین کانال نیست.\n💡 این مشکل به صاحب تبلیغ اطلاع داده خواهد شد.", [[{ text: "🏠 بازگشت", callback_data: "ads_menu" }]]);
   }
   const p = await DB(env).prepare("SELECT status FROM campaign_participants WHERE campaign_id = ? AND user_id = ?").bind(adId, uid).first();
   const reward = ad.reward_per_join || 0;
   const chUrl = `https://t.me/${ad.channel_username.replace("@", "")}`;
+  
   if (p?.status === "rewarded") {
     if (!(await isMember(env, uid, ad.channel_username))) {
       await DB(env).prepare("UPDATE campaign_participants SET status = 'left' WHERE campaign_id = ? AND user_id = ?").bind(adId, uid).run();
@@ -1006,6 +983,7 @@ async function handleAdView(env, cid, mid, uid, adId) {
     }
     return edit(env, cid, mid, `✅ پاداش گرفته‌اید و عضو هستید.\n📌 ${ad.title || ad.channel_username}\n💰 ${reward}`, [[{ text: "👍 مناسب", callback_data: `ad_react_${adId}_good` }, { text: "👎 نامناسب", callback_data: `ad_react_${adId}_bad` }], [{ text: "⏭️ بعدی", callback_data: `ad_skip_${adId}` }], [{ text: "🏠 بازگشت", callback_data: "ads_menu" }]]);
   }
+  
   if (p?.status === "left") {
     if (await isMember(env, uid, ad.channel_username)) {
       await DB(env).prepare("UPDATE campaign_participants SET status = 'rewarded' WHERE campaign_id = ? AND user_id = ?").bind(adId, uid).run();
@@ -1016,8 +994,9 @@ async function handleAdView(env, cid, mid, uid, adId) {
       await addXP(env, uid, 10);
       return edit(env, cid, mid, `🎉 دوباره عضو شدید! +${reward}!\n📌 ${ad.title || ad.channel_username}`, [[{ text: "🏠 بازگشت", callback_data: "ads_menu" }]]);
     }
-    return edit(env, cid, mid, `⚠️ لفت داده بودید.\n📌 ${ad.title || ad.channel_username}\n\nدوباره عضو شوید:`, [[{ text: "📢 عضویت", url: chUrl }], [{ text: "✅ بررسی", callback_data: `ad_check_${adId}` }], [{ text: "🏠 بازگشت", callback_data: "ads_menu" }]]);
+    return edit(env, cid, mid, `⚠️ لفت داده بودید.\n📌 ${ad.title || ad.channel_username}\nدوباره عضو شوید:`, [[{ text: "📢 عضویت", url: chUrl }], [{ text: "✅ بررسی", callback_data: `ad_check_${adId}` }], [{ text: "🏠 بازگشت", callback_data: "ads_menu" }]]);
   }
+  
   if (await isMember(env, uid, ad.channel_username)) {
     const joiner = await getUser(env, uid);
     await DB(env).prepare("INSERT OR REPLACE INTO campaign_participants (campaign_id, user_id, status, reward_given) VALUES (?, ?, 'rewarded', 1)").bind(adId, uid).run();
@@ -1032,17 +1011,18 @@ async function handleAdView(env, cid, mid, uid, adId) {
       const remaining = (ad.total_budget || 0) - (ad.spent || 0) - reward;
       await tg(env.TELEGRAM_TOKEN, "sendMessage", { chat_id: parseInt(ownerId), text: `🎉 عضو جدید!\n📌 ${ad.title || ad.channel_username}\n👤 ${joiner?.first_name || joiner?.username || uid}\n💰 ${reward} | 👥 ${joined?.c || 0} | 💰 ${remaining}` });
     }
-    return edit(env, cid, mid, `🎉 +${reward} امتیاز!\n📌 ${ad.title || ad.channel_username}\n🔗 ${ad.channel_username}\n🔖 ${refId}\n\n⚠️ لفت = کسر پاداش!`, [[{ text: "🏠 بازگشت", callback_data: "ads_menu" }]]);
+    return edit(env, cid, mid, `🎉 +${reward} امتیاز!\n📌 ${ad.title || ad.channel_username}\n🔗 ${ad.channel_username}\n🔖 ${refId}\n⚠️ لفت = کسر پاداش!`, [[{ text: "🏠 بازگشت", callback_data: "ads_menu" }]]);
   }
+  
   const joined = await DB(env).prepare("SELECT COUNT(*) as c FROM campaign_participants WHERE campaign_id = ? AND status = 'rewarded'").bind(adId).first();
-  return edit(env, cid, mid, `📌 ${ad.title || ad.channel_username}\n🔗 ${ad.channel_username}\n💰 ${reward} امتیاز\n👥 ${joined?.c || 0} نفر عضو\n\nابتدا عضو شوید:`, [[{ text: "📢 عضویت", url: chUrl }], [{ text: "✅ بررسی", callback_data: `ad_check_${adId}` }], [{ text: "⏭️ بعدی", callback_data: `ad_skip_${adId}` }], [{ text: "👍 مناسب", callback_data: `ad_react_${adId}_good` }, { text: "👎 نامناسب", callback_data: `ad_react_${adId}_bad` }], [{ text: "🏠 بازگشت", callback_data: "ads_menu" }]]);
+  return edit(env, cid, mid, `📌 ${ad.title || ad.channel_username}\n🔗 ${ad.channel_username}\n💰 ${reward} امتیاز\n👥 ${joined?.c || 0} نفر عضو\nابتدا عضو شوید:`, [[{ text: "📢 عضویت", url: chUrl }], [{ text: "✅ بررسی", callback_data: `ad_check_${adId}` }], [{ text: "⏭️ بعدی", callback_data: `ad_skip_${adId}` }], [{ text: "👍 مناسب", callback_data: `ad_react_${adId}_good` }, { text: "👎 نامناسب", callback_data: `ad_react_${adId}_bad` }], [{ text: "🏠 بازگشت", callback_data: "ads_menu" }]]);
 }
 
 async function editAd(env, cid, mid, uid, adId) {
   const ad = await DB(env).prepare("SELECT * FROM campaigns WHERE id = ? AND CAST(owner_id AS TEXT) = ?").bind(adId, uid).first();
   if (!ad) return edit(env, cid, mid, "دسترسی ندارید.", [[{ text: "📋 بازگشت", callback_data: "my_ads_0" }]]);
   if (!["active", "stopped", "pending"].includes(ad.status)) return edit(env, cid, mid, "این تبلیغ قابل اصلاح نیست.", [[{ text: "📋 بازگشت", callback_data: "my_ads_0" }]]);
-  await edit(env, cid, mid, "✏️ اصلاح تبلیغ\n\n📌 " + (ad.title || ad.channel_username) + "\n🔗 " + ad.channel_username + "\n💰 بودجه: " + (ad.total_budget || 0) + "\n⏰ هزینه ساعتی: " + (ad.hourly_cost || 0) + "/ساعت\n\nچه چیزی را اصلاح کنید؟", [
+  await edit(env, cid, mid, `✏️ اصلاح تبلیغ\n📌 ${ad.title || ad.channel_username}\n🔗 ${ad.channel_username}\n💰 بودجه: ${ad.total_budget || 0}\n⏰ هزینه ساعتی: ${ad.hourly_cost || 0}/ساعت\nچه چیزی را اصلاح کنید؟`, [
     [{ text: "📝 عنوان", callback_data: "ad_edit_title_" + adId }, { text: "⏰ هزینه ساعتی", callback_data: "ad_edit_hourly_" + adId }],
     [{ text: "📋 بازگشت", callback_data: "ad_stats_" + adId }],
   ]);
@@ -1054,9 +1034,9 @@ async function editAdField(env, cid, mid, uid, adId, field) {
   const labels = { title: "عنوان", hourly: "هزینه ساعتی" };
   const cur = field === "title" ? (ad.title || "") : (ad.hourly_cost || 0);
   await setState(env, uid, "edit_ad_" + field, { adId });
-  await edit(env, cid, mid, "✏️ اصلاح " + labels[field] + "\n\nفعلی: " + cur + "\n\nمقدار جدید:", [[{ text: "❌ انصراف", callback_data: "ad_stats_" + adId }]]);
+  await edit(env, cid, mid, `✏️ اصلاح ${labels[field]}\nفعلی: ${cur}\nمقدار جدید:`, [[{ text: "❌ انصراف", callback_data: "ad_stats_" + adId }]]);
 }
-// ==================== Admin Panel ====================
+
 async function adminPanel(env, cid, mid) {
   await edit(env, cid, mid, "⚙️ پنل مدیریت", [
     [{ text: "📊 آمار", callback_data: "admin_stats" }, { text: "👥 کاربران", callback_data: "admin_users_0" }],
@@ -1076,7 +1056,7 @@ async function adminStats(env, cid, mid) {
     DB(env).prepare("SELECT SUM(amount) as t FROM transactions WHERE type = 'ad_creation'").first(),
     DB(env).prepare("SELECT SUM(xp) as t FROM users").first(),
   ]);
-  await edit(env, cid, mid, `📊 آمار ربات\n\n👥 کاربران: ${uc?.c || 0}\n📢 فعال: ${aa?.c || 0}\n⏳ در انتظار: ${pa?.c || 0}\n💰 موجودی: ${tb?.t || 0}\n💵 مالیات: ${Math.abs(tt?.t || 0)}\n📊 XP: ${totalXP?.t || 0}`, [[{ text: "⚙️ بازگشت", callback_data: "admin" }]]);
+  await edit(env, cid, mid, `📊 آمار ربات\n👥 کاربران: ${uc?.c || 0}\n📢 فعال: ${aa?.c || 0}\n⏳ در انتظار: ${pa?.c || 0}\n💰 موجودی: ${tb?.t || 0}\n💵 مالیات: ${Math.abs(tt?.t || 0)}\n📊 XP: ${totalXP?.t || 0}`, [[{ text: "⚙️ بازگشت", callback_data: "admin" }]]);
 }
 
 async function adminUsers(env, cid, mid, offset) {
@@ -1085,7 +1065,7 @@ async function adminUsers(env, cid, mid, offset) {
     DB(env).prepare("SELECT telegram_id, first_name, username, balance, xp, is_blocked, is_admin, admin_role FROM users ORDER BY id DESC LIMIT ? OFFSET ?").bind(limit, offset).all(),
     DB(env).prepare("SELECT COUNT(*) as c FROM users").first(),
   ]);
-  let text = `👥 کاربران\n━━━━━━━━━━━━━━━━\n\n${pageIndicator(offset, limit, total?.c || 0)}\n\n`;
+  let text = `👥 کاربران\n━━━━━━━━━━━━━━━━\n${pageIndicator(offset, limit, total?.c || 0)}\n`;
   const btns = [];
   for (const u of users.results) {
     const name = u.first_name || u.username || u.telegram_id;
@@ -1103,7 +1083,7 @@ async function adminUsers(env, cid, mid, offset) {
 
 async function adminSearch(env, cid, mid, uid) {
   await setState(env, uid, "admin_search", {});
-  await edit(env, cid, mid, "🔍 سرچ کاربر\n\nنام، یوزرنیم یا آیدی:", [[{ text: "❌ انصراف", callback_data: "admin_users_0" }]]);
+  await edit(env, cid, mid, "🔍 سرچ کاربر\nنام، یوزرنیم یا آیدی:", [[{ text: "❌ انصراف", callback_data: "admin_users_0" }]]);
 }
 
 async function adminSearchResults(env, cid, query, offset = 0) {
@@ -1113,11 +1093,11 @@ async function adminSearchResults(env, cid, query, offset = 0) {
     DB(env).prepare("SELECT telegram_id, first_name, username, balance, xp, is_blocked, is_admin, admin_role FROM users WHERE first_name LIKE ? OR username LIKE ? OR telegram_id LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?").bind(like, like, like, limit, offset).all(),
     DB(env).prepare("SELECT COUNT(*) as c FROM users WHERE first_name LIKE ? OR username LIKE ? OR telegram_id LIKE ?").bind(like, like, like).first(),
   ]);
-  let text = `🔍 نتایج سرچ: "${query}"\n━━━━━━━━━━━━━━━━\n\n`;
+  let text = `🔍 نتایج سرچ: "${query}"\n━━━━━━━━━━━━━━━━\n`;
   const btns = [];
   if (users.results.length === 0) { text += "کاربری یافت نشد."; }
   else {
-    text += pageIndicator(offset, limit, total?.c || 0) + "\n\n";
+    text += pageIndicator(offset, limit, total?.c || 0) + "\n";
     for (const u of users.results) {
       const name = u.first_name || u.username || u.telegram_id;
       const perms = getPerms(u, u.telegram_id);
@@ -1150,8 +1130,7 @@ async function adminUserAction(env, cid, mid, tid) {
     const refUser = await getUser(env, t.referred_by);
     if (refUser) refByLine = `${refUser.first_name || refUser.username || refUser.telegram_id} (${refUser.telegram_id})`;
   }
-  const text = `👤 ${t.first_name || t.username || tid}\n\n🆔 ${t.telegram_id}\n${lvl.icon} سطح ${lvl.lvl} (${lvl.name})\n📊 XP: ${t.xp || 0}\n💰 ${t.balance} | 📈 ${t.total_earnings}\n🚫 ${t.is_blocked ? "بله" : "خیر"} | 👑 ${t.is_admin ? "بله" : "خیر"}
-📢 تبلیغ: ${t.ad_blocked ? "🚫 مسدود" : "✅ آزاد"}\n🎭 ${permLabels(t, tid)}\n\n━━━━━━━━━━━━━\n📊 فعالیت\n📢 کمپین: ${adsCreated?.c || 0} (فعال: ${adsActive?.c || 0})\n🎯 عضویت: ${parts?.c || 0}\n👥 دعوت: ${refCount?.c || 0} (${refEarn?.t || 0} امتیاز)\n📨 دعوت‌شده توسط: ${refByLine}\n🧾 تراکنش: ${txCount?.c || 0}`;
+  const text = `👤 ${t.first_name || t.username || tid}\n🆔 ${t.telegram_id}\n${lvl.icon} سطح ${lvl.lvl} (${lvl.name})\n📊 XP: ${t.xp || 0}\n💰 ${t.balance} | 📈 ${t.total_earnings}\n🚫 ${t.is_blocked ? "بله" : "خیر"} | 👑 ${t.is_admin ? "بله" : "خیر"}\n📢 تبلیغ: ${t.ad_blocked ? "🚫 مسدود" : "✅ آزاد"}\n🎭 ${permLabels(t, tid)}\n━━━━━━━━━━━━━\n📊 فعالیت\n📢 کمپین: ${adsCreated?.c || 0} (فعال: ${adsActive?.c || 0})\n🎯 عضویت: ${parts?.c || 0}\n👥 دعوت: ${refCount?.c || 0} (${refEarn?.t || 0} امتیاز)\n📨 دعوت‌شده توسط: ${refByLine}\n🧾 تراکنش: ${txCount?.c || 0}`;
   const btns = [
     [{ text: t.is_blocked ? "✅ رفع مسدودیت" : "🚫 مسدود", callback_data: `${t.is_blocked ? "admin_unblock" : "admin_block"}_${tid}` }],
     [{ text: "🎭 نقش", callback_data: `admin_setrole_${tid}` }, { text: "💰 موجودی", callback_data: `admin_setbal_${tid}` }],
@@ -1168,15 +1147,15 @@ async function adminTransactions(env, cid, mid, offset) {
     DB(env).prepare("SELECT t.id, t.user_id, t.type, t.amount, t.description, t.reference_id, t.created_at, u.first_name, u.username FROM transactions t LEFT JOIN users u ON t.user_id = u.telegram_id ORDER BY t.id DESC LIMIT ? OFFSET ?").bind(limit, offset).all(),
     DB(env).prepare("SELECT COUNT(*) as c FROM transactions").first(),
   ]);
-  let text = `🧾 تراکنش‌های سیستم\n━━━━━━━━━━━━━━━━\n\n`;
+  let text = `🧾 تراکنش‌های سیستم\n━━━━━━━━━━━━━━━━\n`;
   const btns = [];
   if (txs.results.length === 0) { text += "تراکنشی وجود ندارد."; }
   else {
-    text += pageIndicator(offset, limit, total?.c || 0) + "\n\n";
+    text += pageIndicator(offset, limit, total?.c || 0) + "\n";
     for (const t of txs.results) {
       const name = t.first_name || t.username || t.user_id;
       const icon = t.amount > 0 ? "🟢" : "🔴";
-      text += `${icon} ${t.amount > 0 ? "+" : ""}${t.amount} — ${TX_LABELS[t.type] || t.type}\n   👤 ${name} (${t.user_id})\n   💬 ${t.description || "—"}\n   🕐 ${fmtDate(t.created_at)}${t.reference_id ? `\n   🔖 ${t.reference_id}` : ""}\n\n`;
+      text += `${icon} ${t.amount > 0 ? "+" : ""}${t.amount} — ${TX_LABELS[t.type] || t.type}\n👤 ${name} (${t.user_id})\n💬 ${t.description || "—"}\n🕐 ${fmtDate(t.created_at)}${t.reference_id ? `\n🔖 ${t.reference_id}` : ""}\n`;
     }
   }
   const nav = pageNav("admin_tx", offset, limit, txs.results.length === limit);
@@ -1193,13 +1172,13 @@ async function adminUserTx(env, cid, mid, tid, offset) {
   ]);
   const u = await getUser(env, tid);
   const name = u?.first_name || u?.username || tid;
-  let text = `🧾 تراکنش‌های ${name}\n🆔 ${tid}\n━━━━━━━━━━━━━━━━\n\n`;
+  let text = `🧾 تراکنش‌های ${name}\n🆔 ${tid}\n━━━━━━━━━━━━━━━━\n`;
   const btns = [];
   if (txs.results.length === 0) { text += "تراکنشی وجود ندارد."; }
   else {
-    text += pageIndicator(offset, limit, total?.c || 0) + "\n\n";
+    text += pageIndicator(offset, limit, total?.c || 0) + "\n";
     let tin = 0, tout = 0;
-    for (const t of txs.results) { t.amount > 0 ? tin += t.amount : tout += Math.abs(t.amount); text += fmtTx(t, true) + "\n\n"; }
+    for (const t of txs.results) { t.amount > 0 ? tin += t.amount : tout += Math.abs(t.amount); text += fmtTx(t, true) + "\n"; }
     text += `━━━━━━━━━━━━━━━━\n🟢 ${tin} | 🔴 ${tout}`;
   }
   const nav = pageNav(`admin_usertx_${tid}`, offset, limit, txs.results.length === limit);
@@ -1216,14 +1195,14 @@ async function adminUserRefs(env, cid, mid, tid, offset) {
   ]);
   const u = await getUser(env, tid);
   const name = u?.first_name || u?.username || tid;
-  let text = `👥 زیرمجموعه‌های ${name}\n━━━━━━━━━━━━━━━━\n\n`;
+  let text = `👥 زیرمجموعه‌های ${name}\n━━━━━━━━━━━━━━━━\n`;
   const btns = [];
   if (refs.results.length === 0) { text += "زیرمجموعه‌ای وجود ندارد."; }
   else {
-    text += pageIndicator(offset, limit, total?.c || 0) + "\n\n";
+    text += pageIndicator(offset, limit, total?.c || 0) + "\n";
     refs.results.forEach((r, i) => {
       const rn = r.first_name || r.username || r.referred_id;
-      text += `${offset + i + 1}. 👤 ${rn} (${r.referred_id})\n   💰 +${r.reward_amount} | 💼 ${r.balance || 0} | 🕐 ${fmtDate(r.created_at)}\n\n`;
+      text += `${offset + i + 1}. 👤 ${rn} (${r.referred_id})\n💰 +${r.reward_amount} | 💼 ${r.balance || 0} | 🕐 ${fmtDate(r.created_at)}\n`;
     });
   }
   const nav = pageNav(`admin_userrefs_${tid}`, offset, limit, refs.results.length === limit);
@@ -1232,7 +1211,6 @@ async function adminUserRefs(env, cid, mid, tid, offset) {
   await edit(env, cid, mid, text, btns);
 }
 
-// ==================== Paginated Admin Ads Pending ====================
 async function adminAdsMenu(env, cid, mid) {
   const [pending, active, stopped, completed, rejected] = await Promise.all([
     DB(env).prepare("SELECT COUNT(*) as c FROM campaigns WHERE status = 'pending'").first(),
@@ -1241,7 +1219,7 @@ async function adminAdsMenu(env, cid, mid) {
     DB(env).prepare("SELECT COUNT(*) as c FROM campaigns WHERE status = 'completed'").first(),
     DB(env).prepare("SELECT COUNT(*) as c FROM campaigns WHERE status = 'rejected'").first(),
   ]);
-  await edit(env, cid, mid, "📋 مدیریت تبلیغ‌ها\n━━━━━━━━━━━━━━━━\n\n⏳ در انتظار: " + (pending?.c || 0) + "\n🟢 فعال: " + (active?.c || 0) + "\n🛑 متوقف: " + (stopped?.c || 0) + "\n✅ تکمیل: " + (completed?.c || 0) + "\n❌ ردشده: " + (rejected?.c || 0), [
+  await edit(env, cid, mid, `📋 مدیریت تبلیغ‌ها\n━━━━━━━━━━━━━━━━\n⏳ در انتظار: ${(pending?.c || 0)}\n🟢 فعال: ${(active?.c || 0)}\n🛑 متوقف: ${(stopped?.c || 0)}\n✅ تکمیل: ${(completed?.c || 0)}\n❌ ردشده: ${(rejected?.c || 0)}`, [
     [{ text: "⏳ در انتظار (" + (pending?.c || 0) + ")", callback_data: "admin_ap_0" }, { text: "🟢 فعال (" + (active?.c || 0) + ")", callback_data: "admin_ads_active_0" }],
     [{ text: "🛑 متوقف (" + (stopped?.c || 0) + ")", callback_data: "admin_ads_stopped_0" }, { text: "✅ تکمیل (" + (completed?.c || 0) + ")", callback_data: "admin_ads_completed_0" }],
     [{ text: "❌ ردشده (" + (rejected?.c || 0) + ")", callback_data: "admin_ads_rejected_0" }],
@@ -1257,11 +1235,11 @@ async function adminAdsList(env, cid, mid, status, offset) {
   ]);
   const statusIcon = { pending: "⏳", active: "🟢", stopped: "🛑", completed: "✅", rejected: "❌" }[status] || "📋";
   const statusLabel = { pending: "در انتظار", active: "فعال", stopped: "متوقف", completed: "تکمیل", rejected: "ردشده" }[status] || status;
-  let text = statusIcon + " تبلیغ‌های " + statusLabel + "\n━━━━━━━━━━━━━━━━\n\n";
+  let text = statusIcon + " تبلیغ‌های " + statusLabel + "\n━━━━━━━━━━━━━━━━\n";
   const btns = [];
   if (ads.results.length === 0) { text += "تبلیغی نیست."; }
   else {
-    text += pageIndicator(offset, limit, total?.c || 0) + "\n\n";
+    text += pageIndicator(offset, limit, total?.c || 0) + "\n";
     const ownerIds = [...new Set(ads.results.map(a => a.owner_id?.toString()).filter(Boolean))];
     const ownerPlaceholders = ownerIds.map(() => "?").join(",");
     const owners = await DB(env).prepare("SELECT telegram_id, first_name, username, privacy_show_name, privacy_show_owner FROM users WHERE telegram_id IN (" + ownerPlaceholders + ")").bind(...ownerIds).all();
@@ -1271,7 +1249,7 @@ async function adminAdsList(env, cid, mid, status, offset) {
       const ownerName = owner?.privacy_show_owner === 0 ? "مخفی" : (owner?.privacy_show_name === 0 ? "مخفی" : (owner?.first_name || owner?.username || ad.owner_id));
       const approver = ad.approved_by ? "\n✅ تایید: " + ad.approved_by : "";
       const rejecter = ad.rejected_by ? "\n❌ رد: " + ad.rejected_by + (ad.rejected_reason ? " (" + ad.rejected_reason + ")" : "") : "";
-      text += "🔹 " + (ad.title || ad.channel_username) + "\n   🔗 " + ad.channel_username + " | 💰 " + (ad.total_budget || 0) + " | 👤 " + ownerName + approver + rejecter + "\n\n";
+      text += "🔹 " + (ad.title || ad.channel_username) + "\n🔗 " + ad.channel_username + " | 💰 " + (ad.total_budget || 0) + " | 👤 " + ownerName + approver + rejecter + "\n";
       if (status === 'pending') {
         btns.push([{ text: "✅ تایید", callback_data: "admin_approve_" + ad.id }, { text: "❌ رد", callback_data: "admin_reject_" + ad.id }]);
       } else if (status === 'active') {
@@ -1300,7 +1278,7 @@ async function adminAdDetail(env, cid, mid, adId) {
   const good = reacts.results.find(x => x.reaction === "good")?.c || 0;
   const bad = reacts.results.find(x => x.reaction === "bad")?.c || 0;
   const statusLabel = { active: "🟢 فعال", pending: "⏳ در انتظار", stopped: "🛑 متوقف", completed: "✅ تکمیل", rejected: "❌ ردشده" }[ad.status] || ad.status;
-  let text = "👁️ جزئیات تبلیغ\n━━━━━━━━━━━━━━━━\n\n📌 " + (ad.title || ad.channel_username) + "\n🔗 " + ad.channel_username + "\n📊 " + statusLabel + "\n💰 بودجه: " + (ad.total_budget || 0) + " | 💸 " + (ad.spent || 0) + " | 💵 " + ((ad.total_budget || 0) - (ad.spent || 0)) + "\n⏰ ساعتی: " + (ad.hourly_cost || 0) + "/ساعت | پرداخت: " + (ad.hourly_paid || 0) + "\n👥 عضو: " + (joined?.c || 0) + " | ⚠️ لفت: " + (left?.c || 0) + "\n👍 " + good + " | 👎 " + bad + "\n👤 صاحب: " + ownerName;
+  let text = "👁️ جزئیات تبلیغ\n━━━━━━━━━━━━━━━━\n📌 " + (ad.title || ad.channel_username) + "\n🔗 " + ad.channel_username + "\n📊 " + statusLabel + "\n💰 بودجه: " + (ad.total_budget || 0) + " | 💸 " + (ad.spent || 0) + " | 💵 " + ((ad.total_budget || 0) - (ad.spent || 0)) + "\n⏰ ساعتی: " + (ad.hourly_cost || 0) + "/ساعت | پرداخت: " + (ad.hourly_paid || 0) + "\n👥 عضو: " + (joined?.c || 0) + " | ⚠️ لفت: " + (left?.c || 0) + "\n👍 " + good + " | 👎 " + bad + "\n👤 صاحب: " + ownerName;
   if (ad.approved_by) text += "\n✅ تایید توسط: " + ad.approved_by;
   if (ad.rejected_by) text += "\n❌ رد توسط: " + ad.rejected_by + (ad.rejected_reason ? " (" + ad.rejected_reason + ")" : "");
   const btns = [];
@@ -1310,17 +1288,18 @@ async function adminAdDetail(env, cid, mid, adId) {
   btns.push([{ text: "📋 بازگشت", callback_data: "admin_ads_menu" }]);
   await edit(env, cid, mid, text, btns);
 }
+
 async function adminAdsPending(env, cid, mid, offset = 0) {
   const limit = PAGE_SIZE;
   const [pending, total] = await Promise.all([
     DB(env).prepare("SELECT * FROM campaigns WHERE status = 'pending' ORDER BY id DESC LIMIT ? OFFSET ?").bind(limit, offset).all(),
     DB(env).prepare("SELECT COUNT(*) as c FROM campaigns WHERE status = 'pending'").first(),
   ]);
-  let text = "📋 تایید تبلیغ\n━━━━━━━━━━━━━━━━\n\n";
+  let text = "📋 تایید تبلیغ\n━━━━━━━━━━━━━━━━\n";
   const btns = [];
   if (pending.results.length === 0) { text += "تبلیغ در انتظار تایید وجود ندارد."; }
   else {
-    text += pageIndicator(offset, limit, total?.c || 0) + "\n\n";
+    text += pageIndicator(offset, limit, total?.c || 0) + "\n";
     const ownerIds = [...new Set(pending.results.map(a => a.owner_id?.toString()).filter(Boolean))];
     const ownerPlaceholders = ownerIds.map(() => "?").join(",");
     const owners = await DB(env).prepare(`SELECT telegram_id, first_name, username, privacy_show_name, privacy_show_owner FROM users WHERE telegram_id IN (${ownerPlaceholders})`).bind(...ownerIds).all();
@@ -1328,9 +1307,9 @@ async function adminAdsPending(env, cid, mid, offset = 0) {
     for (const ad of pending.results) {
       const owner = ownerMap.get(ad.owner_id?.toString());
       const reacts = await DB(env).prepare("SELECT reaction, COUNT(*) as c FROM ad_reactions WHERE campaign_id = ? GROUP BY reaction").bind(ad.id).all();
-    const good = reacts.results.find(x => x.reaction === "good")?.c || 0;
-    const bad = reacts.results.find(x => x.reaction === "bad")?.c || 0;
-    text += `🔹 ${ad.title || ad.channel_username}\n   🔗 ${ad.channel_username} | 💰 ${ad.total_budget}${ad.hourly_cost ? ` | ⏰ ${ad.hourly_cost}/ساعت` : ""} | 👤 ${owner?.privacy_show_owner === 0 ? "مخفی" : (owner?.privacy_show_name === 0 ? "مخفی" : (owner?.first_name || owner?.username || ad.owner_id))} | 👍${good} 👎${bad}\n\n`;
+      const good = reacts.results.find(x => x.reaction === "good")?.c || 0;
+      const bad = reacts.results.find(x => x.reaction === "bad")?.c || 0;
+      text += `🔹 ${ad.title || ad.channel_username}\n🔗 ${ad.channel_username} | 💰 ${ad.total_budget}${ad.hourly_cost ? ` | ⏰ ${ad.hourly_cost}/ساعت` : ""} | 👤 ${owner?.privacy_show_owner === 0 ? "مخفی" : (owner?.privacy_show_name === 0 ? "مخفی" : (owner?.first_name || owner?.username || ad.owner_id))} | 👍${good} 👎${bad}\n`;
       btns.push([{ text: "✅ تایید", callback_data: `admin_approve_${ad.id}` }, { text: "❌ رد", callback_data: `admin_reject_${ad.id}` }]);
     }
   }
@@ -1345,7 +1324,7 @@ async function adminFinancial(env, cid, mid) {
     getSetting(env, "ad_cost_per_join", 10), getSetting(env, "ad_tax_percent", 5),
     getSetting(env, "referral_percent", 20), DB(env).prepare("SELECT SUM(amount) as t FROM transactions WHERE type = 'ad_creation'").first(),
   ]);
-  await edit(env, cid, mid, `💰 تنظیمات مالی\n\n• هزینه/عضو: ${cost}\n• مالیات: ${tax}%\n• سهم رفرال: ${ref}%\n• هزینه ساعتی: ${await getSetting(env, "default_hourly_cost", 0)}\n• پاداش فعالیت/ساعت: ${await getSetting(env, "activity_reward", 6)} سکه\n• حقوق ادمین/ساعت: ${await getSetting(env, "admin_salary", 100)} سکه\n• سهم ادمین از مالیات: ${await getSetting(env, "admin_tax_share", 30)}%\n• کل مالیات: ${Math.abs(tt?.t || 0)}`, [
+  await edit(env, cid, mid, `💰 تنظیمات مالی\n• هزینه/عضو: ${cost}\n• مالیات: ${tax}%\n• سهم رفرال: ${ref}%\n• هزینه ساعتی: ${await getSetting(env, "default_hourly_cost", 0)}\n• پاداش فعالیت/ساعت: ${await getSetting(env, "activity_reward", 6)} سکه\n• حقوق ادمین/ساعت: ${await getSetting(env, "admin_salary", 100)} سکه\n• سهم ادمین از مالیات: ${await getSetting(env, "admin_tax_share", 30)}%\n• کل مالیات: ${Math.abs(tt?.t || 0)}`, [
     [{ text: "💵 قیمت", callback_data: "admin_set_cost" }, { text: "📊 مالیات", callback_data: "admin_set_tax" }],
     [{ text: "👥 رفرال", callback_data: "admin_set_ref" }, { text: "📝 متن اشتراک", callback_data: "admin_set_share" }],
     [{ text: "⏰ هزینه ساعتی", callback_data: "admin_set_hourly" }, { text: "🎯 پاداش فعالیت", callback_data: "admin_set_activityreward" }],
@@ -1362,14 +1341,14 @@ async function adminTaxLog(env, cid, mid, offset) {
     DB(env).prepare("SELECT COUNT(*) as c FROM tax_log").first(),
   ]);
   const taxNames = { creation: "ایجاد", renewal: "تمدید", cancel_refund: "بازگشت لغو" };
-  let text = "🧾 گزارش مالیات\n━━━━━━━━━━━━━━━━\n\n";
+  let text = "🧾 گزارش مالیات\n━━━━━━━━━━━━━━━━\n";
   const btns = [];
   if (logs.results.length === 0) { text += "رکوردی وجود ندارد."; }
   else {
-    text += pageIndicator(offset, limit, total?.c || 0) + "\n\n";
+    text += pageIndicator(offset, limit, total?.c || 0) + "\n";
     for (const l of logs.results) {
       const name = l.first_name || l.username || l.user_id;
-      text += `${l.amount > 0 ? "🟢" : "🔴"} ${l.amount > 0 ? "+" : ""}${l.amount} — ${taxNames[l.tax_type] || l.tax_type}\n   👤 ${name} (${l.user_id})${l.campaign_id ? `\n   📌 #${l.campaign_id}` : ""}\n   🕐 ${fmtDate(l.created_at)}\n\n`;
+      text += `${l.amount > 0 ? "🟢" : "🔴"} ${l.amount > 0 ? "+" : ""}${l.amount} — ${taxNames[l.tax_type] || l.tax_type}\n👤 ${name} (${l.user_id})${l.campaign_id ? `\n📌 #${l.campaign_id}` : ""}\n🕐 ${fmtDate(l.created_at)}\n`;
     }
   }
   const nav = pageNav("admin_tax_log", offset, limit, logs.results.length === limit);
@@ -1378,18 +1357,17 @@ async function adminTaxLog(env, cid, mid, offset) {
   await edit(env, cid, mid, text, btns);
 }
 
-// ==================== Admin Roles ====================
 async function adminRoles(env, cid, mid, offset) {
   const limit = PAGE_SIZE;
   const [users, total] = await Promise.all([
     DB(env).prepare("SELECT telegram_id, first_name, username, is_admin, admin_role FROM users WHERE is_admin = 1 OR (admin_role IS NOT NULL AND admin_role != 'null') ORDER BY id DESC LIMIT ? OFFSET ?").bind(limit, offset).all(),
     DB(env).prepare("SELECT COUNT(*) as c FROM users WHERE is_admin = 1 OR (admin_role IS NOT NULL AND admin_role != 'null')").first(),
   ]);
-  let text = "🎭 دسترسی‌ها\n━━━━━━━━━━━━━━━━\n\n";
+  let text = "🎭 دسترسی‌ها\n━━━━━━━━━━━━━━━━\n";
   const btns = [];
   if (users.results.length === 0) { text += "ادمینی وجود ندارد."; }
   else {
-    text += pageIndicator(offset, limit, total?.c || 0) + "\n\n";
+    text += pageIndicator(offset, limit, total?.c || 0) + "\n";
     for (const u of users.results) {
       const name = u.first_name || u.username || u.telegram_id;
       const perms = getPerms(u, u.telegram_id);
@@ -1409,7 +1387,7 @@ async function adminSetRole(env, cid, mid, tid) {
   if (!t) return;
   const userPerms = getPerms(t, tid);
   const hasAll = userPerms.length === ALL_PERMS.length;
-  let text = `🎭 دسترسی‌های ${t.first_name || t.username || tid}\n🆔 ${tid}\n🏷️ ${hasAll ? "👑 همه" : userPerms.length > 0 ? `${userPerms.length} دسترسی` : "بدون دسترسی"}\n\nکلیک = فعال/غیرفعال:`;
+  let text = `🎭 دسترسی‌های ${t.first_name || t.username || tid}\n🆔 ${tid}\n🏷️ ${hasAll ? "👑 همه" : userPerms.length > 0 ? `${userPerms.length} دسترسی` : "بدون دسترسی"}\nکلیک = فعال/غیرفعال:`;
   const btns = ALL_PERMS.map(p => [{ text: `${userPerms.includes(p.key) ? "✅" : "⬜"} ${p.label}`, callback_data: `perm_toggle_${p.key}_${tid}` }]);
   btns.push([{ text: "👑 همه", callback_data: `perm_all_${tid}` }]);
   btns.push([{ text: "❌ حذف همه", callback_data: `perm_clear_${tid}` }]);
@@ -1435,8 +1413,10 @@ async function handleMessage(env, upd) {
       await DB(env).prepare("UPDATE users SET last_active = ? WHERE telegram_id = ?").bind(nowStr, uid).run();
     }
   } catch (e) { console.error("activity:", e); }
+  
   if (u?.is_blocked === 1) return send(env, chat.id, "❌ حساب شما مسدود است.");
   const admin = isAdmin(u, uid);
+  
   if (admin && u?.user_state) {
     if (u.user_state === "admin_broadcast") {
       if (text === "❌ انصراف") { await clearState(env, uid); return send(env, chat.id, "❌ لغو شد."); }
@@ -1445,7 +1425,7 @@ async function handleMessage(env, upd) {
       await DB(env).prepare("INSERT INTO inbox_messages (admin_id, admin_name, text) VALUES (?, ?, ?)").bind(uid, (adminUser?.first_name || adminUser?.username || uid), text).run();
       const all = await DB(env).prepare("SELECT telegram_id FROM users WHERE is_blocked = 0 AND inbox_muted = 0").all();
       let sent = 0, fail = 0;
-      for (const r of all.results) { (await tg(env.TELEGRAM_TOKEN, "sendMessage", { chat_id: r.telegram_id, text: "📥 پیام جدید در اینباکس!\n\n" + text, reply_markup: { inline_keyboard: [[{ text: "📥 باز کردن اینباکس", callback_data: "inbox_0" }]] } }))?.ok ? sent++ : fail++; }
+      for (const r of all.results) { (await tg(env.TELEGRAM_TOKEN, "sendMessage", { chat_id: r.telegram_id, text: "📥 پیام جدید در اینباکس!\n" + text, reply_markup: { inline_keyboard: [[{ text: "📥 باز کردن اینباکس", callback_data: "inbox_0" }]] } }))?.ok ? sent++ : fail++; }
       return send(env, chat.id, `✅ ارسال شد.\n📤 ${sent} | ❌ ${fail}`);
     }
     if (u.user_state === "admin_search") {
@@ -1493,7 +1473,7 @@ async function handleMessage(env, upd) {
       await setSetting(env, "like_reward", v); await clearState(env, uid);
       return send(env, chat.id, "✅ پاداش لایک: " + v + " سکه", [[{ text: "📝 بازگشت", callback_data: "admin_content" }]]);
     }
-    if (u.user_state === u.user_state === "admin_set_share") {
+    if (u.user_state === "admin_set_share") {
       await setSetting(env, "referral_share_text", text); await clearState(env, uid);
       return send(env, chat.id, "✅ متن اشتراک ذخیره شد.", [[{ text: "💰 بازگشت", callback_data: "admin_financial" }]]);
     }
@@ -1510,7 +1490,8 @@ async function handleMessage(env, upd) {
       return send(env, chat.id, `✅ موجودی: ${v}\n🔖 ${refId}`, [[{ text: "👥 بازگشت", callback_data: `admin_user_${tid}` }]]);
     }
   }
-    if (u?.user_state === "edit_ad_title") {
+  
+  if (u?.user_state === "edit_ad_title") {
     let d = {};
     try { d = JSON.parse(u.state_data || "{}"); } catch { d = {}; }
     if (!d.adId) return;
@@ -1530,15 +1511,17 @@ async function handleMessage(env, upd) {
     await send(env, chat.id, "✅ هزینه ساعتی اصلاح شد: " + v + "/ساعت", [[{ text: "📊 مشاهده", callback_data: "ad_stats_" + d.adId }]]);
     return;
   }
-if (u?.user_state?.startsWith("create_ad")) {
+  if (u?.user_state?.startsWith("create_ad")) {
     if (await handleAdMessage(env, chat, u, uid, text)) return;
   }
-    if (text === "/help") {
+  
+  if (text === "/help") {
     const cost = await getSetting(env, "ad_cost_per_join", 10);
     const taxP = await getSetting(env, "ad_tax_percent", 5);
-    return send(env, chat.id, "📚 راهنمای ربات\n━━━━━━━━━━━━━━━━\n\n🤖 این ربات برای تبلیغ کانال و کسب درآمد است.\n\n📢 تبلیغ‌گذار:\n• /start → 📢 تبلیغات → ➕ ایجاد تبلیغ\n• ربات را ادمین کانال کنید\n• هزینه/عضو: " + cost + " | مالیات: " + taxP + "%\n\n💰 کاربر:\n• 📢 تبلیغات → عضو شوید → پاداش بگیرید\n• ⚠️ لفت = کسر پاداش\n\n👥 دعوت دوستان = درآمد بیشتر\n\nℹ️ درباره ما و 📚 آموزش در منوی اصلی\n📜 قوانین: /rules\n\n🔒 حریم خصوصی شما محترم است.", [[{ text: "🏠 بازگشت", callback_data: "main" }]]);
+    return send(env, chat.id, `📚 راهنمای ربات\n━━━━━━━━━━━━━━━━\n🤖 این ربات برای تبلیغ کانال و کسب درآمد است.\n📢 تبلیغ‌گذار:\n• /start → 📢 تبلیغات → ➕ ایجاد تبلیغ\n• ربات را ادمین کانال کنید\n• هزینه/عضو: ${cost} | مالیات: ${taxP}%\n💰 کاربر:\n• 📢 تبلیغات → عضو شوید → پاداش بگیرید\n• ⚠️ لفت = کسر پاداش\n👥 دعوت دوستان = درآمد بیشتر\nℹ️ درباره ما و 📚 آموزش در منوی اصلی\n📜 قوانین: /rules\n🔒 حریم خصوصی شما محترم است.`, [[{ text: "🏠 بازگشت", callback_data: "main" }]]);
   }
-if (text === "/start" || text?.startsWith("/start ")) {
+  
+  if (text === "/start" || text?.startsWith("/start ")) {
     if (text?.includes("ref_") && !u?.referred_by) {
       const code = text.split("ref_")[1]?.split(" ")[0];
       if (code) {
@@ -1563,10 +1546,11 @@ if (text === "/start" || text?.startsWith("/start ")) {
     if (!u?.rules_accepted) {
       const r = await DB(env).prepare("SELECT content FROM rules WHERE is_active = 1 ORDER BY version DESC LIMIT 1").first();
       const rp = await getSetting(env, "referral_percent", 20);
-      return send(env, chat.id, (r?.content || `📜 قوانین:\n1. رعایت ادب\n2. بدون محتوای غیراخلاقی\n3. لفت = کسر\n\n💰 مالیات: 5%\n• ${rp}% به معرف`) + "\n\n✅ قوانین را می‌پذیرم:", [[{ text: "✅ قبول", callback_data: "accept_rules" }]]);
+      return send(env, chat.id, (r?.content || `📜 قوانین:\n1. رعایت ادب\n2. بدون محتوای غیراخلاقی\n3. لفت = کسر\n💰 مالیات: 5%\n• ${rp}% به معرف`) + "\n✅ قوانین را می‌پذیرم:", [[{ text: "✅ قبول", callback_data: "accept_rules" }]]);
     }
     return mainMenu(env, chat.id, null, u, admin);
   }
+  
   if (text && !text.startsWith("/")) {
     return send(env, chat.id, "از /start استفاده کنید.", [[{ text: "🏠 منو", callback_data: "main" }]]);
   }
@@ -1584,6 +1568,7 @@ async function handleCallback(env, upd) {
   if (!u) return;
   if (u?.is_blocked === 1) return alert(env, cb.id, "❌ مسدود هستید.");
   const admin = isAdmin(u, uid);
+  
   try {
     const nowMs = Date.now();
     const nowStr = new Date(nowMs).toISOString().slice(0, 19).replace("T", " ");
@@ -1595,6 +1580,7 @@ async function handleCallback(env, upd) {
       await DB(env).prepare("UPDATE users SET last_active = ? WHERE telegram_id = ?").bind(nowStr, uid).run();
     }
   } catch (e) { console.error("activity_cb:", e); }
+  
   if (d === "main") return mainMenu(env, cid, mid, u, admin);
   if (d === "user_panel") return userPanel(env, cid, mid, u);
   if (d === "ads_menu") return adsMenu(env, cid, mid, uid, 0);
@@ -1654,7 +1640,7 @@ async function handleCallback(env, upd) {
     if (!canAccess(u, uid, "content")) return;
     const cur = await getSetting(env, "admin_tutorial_text", "");
     await setState(env, uid, "admin_edit_admin_tutorial", {});
-    return edit(env, cid, mid, "✏️ ویرایش «آموزش ادمین»\n\nمتن فعلی:\n" + (cur || "(پیش‌فرض)") + "\n\nمتن جدید را ارسال کنید:", [[{ text: "❌ انصراف", callback_data: "admin_content" }]]);
+    return edit(env, cid, mid, "✏️ ویرایش «آموزش ادمین»\nمتن فعلی:\n" + (cur || "(پیش‌فرض)") + "\nمتن جدید را ارسال کنید:", [[{ text: "❌ انصراف", callback_data: "admin_content" }]]);
   }
   if (d === "admin_content") {
     if (!canAccess(u, uid, "content")) return;
@@ -1664,19 +1650,19 @@ async function handleCallback(env, upd) {
     if (!canAccess(u, uid, "content")) return;
     const cur = await getSetting(env, "about_text", "");
     await setState(env, uid, "admin_edit_about", {});
-    return edit(env, cid, mid, "✏️ ویرایش «درباره ما»\n\nمتن فعلی:\n" + (cur || "(پیش‌فرض)") + "\n\nمتن جدید را ارسال کنید:", [[{ text: "❌ انصراف", callback_data: "admin_content" }]]);
+    return edit(env, cid, mid, "✏️ ویرایش «درباره ما»\nمتن فعلی:\n" + (cur || "(پیش‌فرض)") + "\nمتن جدید را ارسال کنید:", [[{ text: "❌ انصراف", callback_data: "admin_content" }]]);
   }
   if (d === "admin_edit_tutorial") {
     if (!canAccess(u, uid, "content")) return;
     const cur = await getSetting(env, "tutorial_text", "");
     await setState(env, uid, "admin_edit_tutorial", {});
-    return edit(env, cid, mid, "✏️ ویرایش «آموزش»\n\nمتن فعلی:\n" + (cur || "(پیش‌فرض)") + "\n\nمتن جدید را ارسال کنید:", [[{ text: "❌ انصراف", callback_data: "admin_content" }]]);
+    return edit(env, cid, mid, "✏️ ویرایش «آموزش»\nمتن فعلی:\n" + (cur || "(پیش‌فرض)") + "\nمتن جدید را ارسال کنید:", [[{ text: "❌ انصراف", callback_data: "admin_content" }]]);
   }
   if (d === "admin_set_likereward") {
     if (!canAccess(u, uid, "content")) return;
     await setState(env, uid, "admin_set_likereward", {});
     const cur = await getSetting(env, "like_reward", 10);
-    return edit(env, cid, mid, "💰 پاداش لایک فعلی: " + cur + "\n\nمقدار جدید:", [[{ text: "❌ انصراف", callback_data: "admin_content" }]]);
+    return edit(env, cid, mid, "💰 پاداش لایک فعلی: " + cur + "\nمقدار جدید:", [[{ text: "❌ انصراف", callback_data: "admin_content" }]]);
   }
   if (d === "rules") return rules(env, cid, mid);
   if (d === "my_refs_0" || d.startsWith("my_refs_")) return myReferrals(env, cid, mid, u, parseInt(d.replace("my_refs_", "")) || 0);
@@ -1703,9 +1689,9 @@ async function handleCallback(env, upd) {
     return editAd(env, cid, mid, uid, adId);
   }
   if (d === "ad_create") {
-    if (u?.ad_blocked) return edit(env, cid, mid, "🚫 شما از تبلیغ‌گذاری مسدود شده‌اید!\n\n❌ دلیل: نقض قوانین ربات\n\nبرای رفع مسدودیت با ادمین تماس بگیرید.", [[{ text: "🏠 بازگشت", callback_data: "main" }]]);
+    if (u?.ad_blocked) return edit(env, cid, mid, "🚫 شما از تبلیغ‌گذاری مسدود شده‌اید!\n❌ دلیل: نقض قوانین ربات\nبرای رفع مسدودیت با ادمین تماس بگیرید.", [[{ text: "🏠 بازگشت", callback_data: "main" }]]);
     await setState(env, uid, "create_ad_channel", {});
-    return edit(env, cid, mid, "➕ ایجاد تبلیغ\n\n⚠️ ربات باید ادمین کانال باشد.\n\nآیدی کانال با @:\n@example", [[{ text: "❌ انصراف", callback_data: "ad_cancel" }]]);
+    return edit(env, cid, mid, "➕ ایجاد تبلیغ\n⚠️ ربات باید ادمین کانال باشد.\nآیدی کانال با @:\n@example", [[{ text: "❌ انصراف", callback_data: "ad_cancel" }]]);
   }
   if (d === "ad_cancel") {
     await clearState(env, uid);
@@ -1723,7 +1709,7 @@ async function handleCallback(env, upd) {
     const status = member?.result?.status;
     if (status === "administrator" || status === "creator") {
       await setState(env, uid, "create_ad_title", { channel: ch, budget: 0 });
-      return edit(env, cid, mid, "✅ کانال: " + ch + "\n\n✅ ربات ادمین کانال است.\n\nعنوان تبلیغ:", [[{ text: "❌ انصراف", callback_data: "ad_cancel" }]]);
+      return edit(env, cid, mid, "✅ کانال: " + ch + "\n✅ ربات ادمین کانال است.\nعنوان تبلیغ:", [[{ text: "❌ انصراف", callback_data: "ad_cancel" }]]);
     }
     return alert(env, cb.id, "❌ ربات هنوز ادمین نیست! ابتدا ربات را ادمین کنید.");
   }
@@ -1734,7 +1720,7 @@ async function handleCallback(env, upd) {
     s.hourlyCost = 0;
     await setState(env, uid, "create_ad_budget", s);
     const cost = await getSetting(env, "ad_cost_per_join", 10);
-    return edit(env, cid, mid, "✅ هزینه ساعتی: 0 (بدون هزینه ساعتی)\n💰 هزینه/عضو: " + cost + "\n\nبودجه را انتخاب کنید:", [
+    return edit(env, cid, mid, "✅ هزینه ساعتی: 0 (بدون هزینه ساعتی)\n💰 هزینه/عضو: " + cost + "\nبودجه را انتخاب کنید:", [
       [{ text: "➕100", callback_data: "bud_add_100" }, { text: "➕500", callback_data: "bud_add_500" }, { text: "➕1000", callback_data: "bud_add_1000" }],
       [{ text: "❌ انصراف", callback_data: "ad_cancel" }],
     ]);
@@ -1749,7 +1735,7 @@ async function handleCallback(env, upd) {
     if (reaction === "bad") {
       const ad = await DB(env).prepare("SELECT * FROM campaigns WHERE id = ?").bind(adId).first();
       const reporter = await getUser(env, uid);
-      await tg(env.TELEGRAM_TOKEN, "sendMessage", { chat_id: SUPER_ADMIN, text: "⚠️ گزارش تبلیغ نامناسب!\n\n📌 " + (ad?.title || adId) + "\n🔗 " + (ad?.channel_username || "") + "\n👤 گزارش‌دهنده: " + (reporter?.first_name || reporter?.username || uid) });
+      await tg(env.TELEGRAM_TOKEN, "sendMessage", { chat_id: SUPER_ADMIN, text: "⚠️ گزارش تبلیغ نامناسب!\n📌 " + (ad?.title || adId) + "\n🔗 " + (ad?.channel_username || "") + "\n👤 گزارش‌دهنده: " + (reporter?.first_name || reporter?.username || uid) });
       return alert(env, cb.id, "👎 گزارش شد! ادمین‌ها بررسی می‌کنند.\n💡 می‌توانید از تبلیغ بگذرید.", true);
     }
     return alert(env, cb.id, "👍 ممنون! نظر شما ثبت شد.", true);
@@ -1946,13 +1932,14 @@ async function handleCallback(env, upd) {
   if (d === "admin_addrole") {
     if (!canAccess(u, uid, "set_role")) return;
     await setState(env, uid, "admin_addrole", {});
-    return edit(env, cid, mid, "➕ افزودن نقش\n\nآیدی عددی کاربر:", [[{ text: "❌ انصراف", callback_data: "admin_roles_0" }]]);
+    return edit(env, cid, mid, "➕ افزودن نقش\nآیدی عددی کاربر:", [[{ text: "❌ انصراف", callback_data: "admin_roles_0" }]]);
   }
   if (d === "admin_roles_0" || d.startsWith("admin_roles_")) {
     if (!canAccess(u, uid, "set_role")) return;
     return adminRoles(env, cid, mid, parseInt(d.replace("admin_roles_", "")) || 0);
   }
   if (d === "admin_financial") { if (canAccess(u, uid, "financial")) return adminFinancial(env, cid, mid); return; }
+  
   const finSettings = {
     admin_set_cost: { key: "ad_cost_per_join", label: "قیمت", isPct: false },
     admin_set_tax: { key: "ad_tax_percent", label: "مالیات", isPct: true },
@@ -1968,7 +1955,7 @@ async function handleCallback(env, upd) {
       if (!canAccess(u, uid, "financial")) return;
       await setState(env, uid, action, {});
       const cur = await getSetting(env, cfg.key, cfg.isPct ? (cfg.key === "referral_percent" ? 20 : 5) : 10);
-      const prompt = cfg.isText ? `📝 متن اشتراک\n\nفعلی:\n${cur || "(پیش‌فرض)"}\n\nمتن جدید:\n({name}, {link})` : `${cfg.label} فعلی: ${cur}${cfg.isPct ? "%" : ""}\n\n${cfg.label} جدید:`;
+      const prompt = cfg.isText ? `📝 متن اشتراک\nفعلی:\n${cur || "(پیش‌فرض)"}\nمتن جدید:\n({name}, {link})` : `${cfg.label} فعلی: ${cur}${cfg.isPct ? "%" : ""}\n${cfg.label} جدید:`;
       return edit(env, cid, mid, prompt, [[{ text: "❌ انصراف", callback_data: "admin_financial" }]]);
     }
   }
@@ -1995,11 +1982,13 @@ async function migrateDB(env) {
     if (!colNames.includes("lang")) await DB(env).prepare("ALTER TABLE users ADD COLUMN lang TEXT DEFAULT 'fa'").run();
     if (!colNames.includes("privacy_show_owner")) await DB(env).prepare("ALTER TABLE users ADD COLUMN privacy_show_owner INTEGER DEFAULT 1").run();
     if (!colNames.includes("last_hourly_reward")) await DB(env).prepare("ALTER TABLE users ADD COLUMN last_hourly_reward TEXT").run();
+    
     await DB(env).prepare("CREATE TABLE IF NOT EXISTS inbox_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id TEXT, admin_name TEXT, text TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)").run();
     await DB(env).prepare("CREATE TABLE IF NOT EXISTS inbox_likes (message_id INTEGER, user_id TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (message_id, user_id))").run();
     await DB(env).prepare("CREATE TABLE IF NOT EXISTS page_likes (page_key TEXT, user_id TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (page_key, user_id))").run();
     await DB(env).prepare("CREATE TABLE IF NOT EXISTS ad_reactions (campaign_id INTEGER, user_id TEXT, reaction TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (campaign_id, user_id))").run();
-    const newRules = "📜 قوانین استفاده از ربات\n━━━━━━━━━━━━━━━━\n\n✅ تبلیغ‌گذاری:\n• ربات باید ادمین کانال شما باشد\n• محتوای تبلیغ باید مطابق قوانین تلگرام و اصول انسانی باشد\n• تبلیغ نامناسب: بار اول اخطار + رد، بار دوم مسدودیت از تبلیغ‌گذاری\n\n🔒 حریم خصوصی:\n• اطلاعات شما محفوظ است و فقط در موارد قانونی/دولتی یا شرایط اضطراری منتقل می‌شود\n• عضویت در گروه/کانال‌ها و محتوای آن‌ها به ما ربطی ندارد\n\n⚠️ رفتار کاربران:\n• لفت دادن = کسر خودکار پاداش\n• تبلیغ نامناسب؟ 👎 بزنید تا ادمین‌ها مطلع شوند یا ⏭️ رد شوید\n\n📌 استفاده از ربات = پذیرش تمام قوانین\nما زیر نظر قوانین تلگرام فعالیت می‌کنیم:\ntelegram.org/privacy-tpa\n\n💰 مالیات: 5% | سهم معرف: 20%"
+    
+    const newRules = "📜 قوانین استفاده از ربات\n━━━━━━━━━━━━━━━━\n✅ تبلیغ‌گذاری:\n• ربات باید ادمین کانال شما باشد\n• محتوای تبلیغ باید مطابق قوانین تلگرام و اصول انسانی باشد\n• تبلیغ نامناسب: بار اول اخطار + رد، بار دوم مسدودیت از تبلیغ‌گذاری\n🔒 حریم خصوصی:\n• اطلاعات شما محفوظ است و فقط در موارد قانونی/دولتی یا شرایط اضطراری منتقل می‌شود\n• عضویت در گروه/کانال‌ها و محتوای آن‌ها به ما ربطی ندارد\n⚠️ رفتار کاربران:\n• لفت دادن = کسر خودکار پاداش\n• تبلیغ نامناسب؟ 👎 بزنید تا ادمین‌ها مطلع شوند یا ⏭️ رد شوید\n📌 استفاده از ربات = پذیرش تمام قوانین\nما زیر نظر قوانین تلگرام فعالیت می‌کنیم:\ntelegram.org/privacy-tpa\n💰 مالیات: 5% | سهم معرف: 20%";
     const existingRules = await DB(env).prepare("SELECT id, content FROM rules WHERE is_active = 1 ORDER BY version DESC LIMIT 1").first();
     if (!existingRules || existingRules.content !== newRules) {
       await DB(env).prepare("UPDATE rules SET is_active = 0 WHERE is_active = 1").run();
