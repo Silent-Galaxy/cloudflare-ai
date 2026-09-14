@@ -1,5 +1,3 @@
-# 🎯 عالی! حالا بذار کامل‌ش کنم و بخش‌های لازم رو اضافه کنم:
-
 ---
 
 # 🤖 Cloudflare AI - Telegram Bot Platform
